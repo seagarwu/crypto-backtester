@@ -6,8 +6,11 @@
 
 from .binance import (
     BinanceAPIError,
+    UnsupportedIntervalError,
     DataDownloader,
     download_binance_data,
+    download_klines_range,
+    parse_interval_to_ms,
     datetime_to_timestamp,
     timestamp_to_datetime,
 )
@@ -21,8 +24,11 @@ from .loader import (
 __all__ = [
     # Binance
     "BinanceAPIError",
+    "UnsupportedIntervalError",
     "DataDownloader",
     "download_binance_data",
+    "download_klines_range",
+    "parse_interval_to_ms",
     "datetime_to_timestamp",
     "timestamp_to_datetime",
     # Loader

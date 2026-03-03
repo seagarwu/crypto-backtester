@@ -63,6 +63,7 @@ class BacktestEngine:
         initial_capital: float = 10000.0,
         commission_rate: float = 0.001,  # 0.1% 手續費
         position_size: float = 1.0,       # 1.0 = 全倉, 0.5 = 50% 倉位
+        execution_price: str = "close",   # "close" 或 "next_open"
     ):
         """
         初始化回測引擎
@@ -71,10 +72,14 @@ class BacktestEngine:
             initial_capital: 初始資金
             commission_rate: 手續費率（進出台幣的 %）
             position_size: 每次進場的資金比例
+            execution_price: 交易執行價格模式
+                - "close": 當根 K 線收盤價（會有 lookahead 風險）
+                - "next_open": 下一根 K 線開盤價（更實際，避免 lookahead）
         """
         self.initial_capital = initial_capital
         self.commission_rate = commission_rate
         self.position_size = position_size
+        self.execution_price = execution_price
 
         # 運行時狀態
         self.current_capital = initial_capital
@@ -124,9 +129,10 @@ class BacktestEngine:
         self.reset()
 
         # 執行回測
-        for i in range(len(df)):
+        for i in range(len(df) - 1):
             row = df.iloc[i]
-            self._process_bar(row)
+            next_row = df.iloc[i + 1] if i + 1 < len(df) else None
+            self._process_bar(row, next_row)
 
         # 記錄最終資產
         self._record_equity(df.iloc[-1])
@@ -143,23 +149,33 @@ class BacktestEngine:
 
         return result
 
-    def _process_bar(self, bar: pd.Series) -> None:
-        """處理單根 K 線"""
-        current_price = bar["close"]
+    def _process_bar(self, bar: pd.Series, next_bar: Optional[pd.Series] = None) -> None:
+        """處理單根 K 線
+        
+        Args:
+            bar: 當前 K 線
+            next_bar: 下一根 K 線（用於 next_open 執行）
+        """
+        # 決定執行價格
+        if self.execution_price == "next_open" and next_bar is not None:
+            exec_price = next_bar["open"]
+        else:
+            exec_price = bar["close"]
+        
         signal = bar.get("signal", 0)
 
         # 記錄當前資產（使用收盤價估值）
         self._record_equity(bar)
 
-        # 處理訊號
+        # 處理訊號（使用執行價格）
         if signal == 1 and self.position is None:  # 買入訊號且無持倉
             self._open_position(
-                entry_price=current_price,
+                entry_price=exec_price,
                 entry_datetime=str(bar["datetime"]),
             )
         elif signal == -1 and self.position is not None:  # 賣出訊號且有持倉
             self._close_position(
-                exit_price=current_price,
+                exit_price=exec_price,
                 exit_datetime=str(bar["datetime"]),
             )
 
@@ -279,6 +295,7 @@ def run_backtest(
     initial_capital: float = 10000.0,
     commission_rate: float = 0.001,
     position_size: float = 1.0,
+    execution_price: str = "close",
 ) -> BacktestResult:
     """
     便捷函數：執行回測
@@ -289,6 +306,7 @@ def run_backtest(
         initial_capital: 初始資金
         commission_rate: 手續費率
         position_size: 倉位比例
+        execution_price: 交易執行價格模式 ("close" 或 "next_open")
 
     Returns:
         BacktestResult 物件
@@ -297,5 +315,6 @@ def run_backtest(
         initial_capital=initial_capital,
         commission_rate=commission_rate,
         position_size=position_size,
+        execution_price=execution_price,
     )
     return engine.run(data, signals)
