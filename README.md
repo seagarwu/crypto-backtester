@@ -35,15 +35,21 @@ crypto-backtester/
 ├── experiments/           # 研究實驗模組
 │   ├── grid_search.py     # 參數網格掃描
 │   └── walk_forward.py    # Walk-forward 測試
+├── vss/                   # VSS 市場分析模組
+│   ├── types.py           # 類型定義
+│   ├── analyzer.py       # 市場分析器
+│   └── observer.py       # 市場觀察器
+├── alignment/             # 人機對齊模組
+│   ├── types.py           # 決策類型
+│   ├── evaluator.py      # 對齊評估器
+│   ├── recorder.py       # 判斷記錄器
+│   └── controller.py     # 決策控制器
 ├── tests/                 # 測試
 ├── scripts/               # 腳本
-│   ├── run_backtest.py
-│   ├── run_grid_search.py
-│   └── run_walk_forward.py
 ├── configs/               # 配置
-│   └── backtest_config.py
 ├── requirements.txt
 ├── pyproject.toml
+├── VSS_TRADING_ARCHITECTURE.md  # VSS 架構說明
 └── README.md
 ```
 
@@ -227,6 +233,27 @@ summary = result["summary"]
 
 - `grid_search.py`: 參數網格掃描
 - `walk_forward.py`: Walk-forward 測試
+
+### VSS 市場分析模組 (vss/)
+
+市場狀態視覺化（VSS）分析，實現即時市場監控與人類對齊。
+
+| 模組 | 功能 |
+|------|------|
+| `types.py` | 類型定義 (`MarketState`, `HumanJudgment`, `VSSAnalysisResult`, `AlignmentResult`) |
+| `analyzer.py` | `VSSAnalyzer` - 市場分析器，分析 K 線形態、趨勢、動量 |
+| `observer.py` | `VSSObserver` - 市場觀察器，回測中即時觸發分析 |
+
+### 人機對齊模組 (alignment/)
+
+人類判斷與 VSS 分析結果的對齊評估與決策控制。
+
+| 模組 | 功能 |
+|------|------|
+| `types.py` | 決策類型 (`Decision`, `DecisionReason`) |
+| `evaluator.py` | `AlignmentEvaluator` - 對齊評估器，計算人類與 VSS 判斷的一致性 |
+| `recorder.py` | `JudgmentRecorder` - 判斷記錄器，持久化人類判斷與對齊結果 |
+| `controller.py` | `DecisionController` - 決策控制器，根據對齊分數決定是否執行交易 |
 
 ## 🧪 測試
 
