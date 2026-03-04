@@ -27,7 +27,7 @@ class AgentRole(Enum):
 class AgentConfig:
     """Agent 配置"""
     role: AgentRole
-    model: str = "openai/gpt-4o-mini"
+    model: str = "minimax/minimax-chat"  # MiniMax model
     temperature: float = 0.7
     max_tokens: int = 2000
     system_prompt: str = ""

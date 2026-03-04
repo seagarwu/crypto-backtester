@@ -1,262 +1,102 @@
-"""多智能體 Workflow - 使用 LangGraph StateGraph"""
+"""多智能體 Workflow - 獨立 Agent 執行"""
 
-from typing import TypedDict, Annotated, Sequence
+from typing import TypedDict, Annotated, Sequence, Callable, Optional, List, Dict, Any
 import operator
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage
-from langgraph.prebuilt import ToolNode
 
 from . import AgentRole, AgentConfig, TradingState, get_llm, AGENT_PROMPTS
 
 
-# 定義 Graph 狀態
-class AgentState(TypedDict):
-    """多智能體系統的共享狀態"""
-    messages: Annotated[Sequence[BaseMessage], operator.add]
-    market_data: dict
-    risk_assessment: dict
-    strategy_proposal: dict
-    backtest_result: dict
-    code_output: str
-    final_report: str
-    next_agent: str
+# ==================== 獨立 Agent 執行器 ====================
 
-
-def create_market_monitor_node():
-    """創建市場監控 Agent 節點"""
-    def market_monitor_node(state: AgentState) -> AgentState:
-        config = AgentConfig(
-            role=AgentRole.MARKET_MONITOR,
-            system_prompt=AGENT_PROMPTS[AgentRole.MARKET_MONITOR]
-        )
-        llm = get_llm(config)
-        
-        # 模擬市場數據（實際應該從 API 獲取）
-        market_info = state.get("market_data", {})
-        
-        prompt = f"""分析以下市場數據：
-{market_info}
-
-請提供你的市場分析。"""
-        
-        response = llm.invoke(prompt)
-        
-        return {
-            "messages": [response],
-            "next_agent": "risk_manager"
-        }
+class AgentExecutor:
+    """獨立 Agent 執行器 - 每個 Agent 可單獨運行"""
     
-    return market_monitor_node
-
-
-def create_risk_manager_node():
-    """創建風險管理 Agent 節點"""
-    def risk_manager_node(state: AgentState) -> AgentState:
-        config = AgentConfig(
-            role=AgentRole.RISK_MANAGER,
-            system_prompt=AGENT_PROMPTS[AgentRole.RISK_MANAGER]
+    def __init__(self, role: AgentRole, model: str = "minimax/minimax-chat"):
+        self.role = role
+        self.config = AgentConfig(
+            role=role,
+            model=model,
+            system_prompt=AGENT_PROMPTS[role]
         )
-        llm = get_llm(config)
-        
-        # 獲取市場監控結果
-        messages = state.get("messages", [])
-        market_report = messages[-1].content if messages else "無市場數據"
-        
-        prompt = f"""根據市場監控報告：
-{market_report}
+        self.llm = None
+    
+    def _get_llm(self):
+        """懒加载 LLM"""
+        if self.llm is None:
+            self.llm = get_llm(self.config)
+        return self.llm
+    
+    def run(self, prompt: str) -> str:
+        """執行 Agent - 輸入 prompt，返回回應"""
+        llm = self._get_llm()
+        response = llm.invoke(prompt)
+        return response.content
+    
+    def analyze_market(self, market_data: Dict[str, Any]) -> str:
+        """市場監控專用"""
+        data_str = "\n".join([f"- {k}: {v}" for k, v in market_data.items()])
+        prompt = f"請分析以下市場數據：\n{data_str}"
+        return self.run(prompt)
+    
+    def assess_risk(self, portfolio: Dict[str, Any], market_state: str) -> str:
+        """風險管理專用"""
+        portfolio_str = "\n".join([f"- {k}: {v}" for k, v in portfolio.items()])
+        prompt = f"""投資組合狀態：
+{portfolio_str}
+
+市場狀態：{market_state}
 
 請進行風險評估並給出交易建議。"""
-        
-        response = llm.invoke(prompt)
-        
-        return {
-            "messages": [response],
-            "risk_assessment": {"report": response.content, "approved": True},
-            "next_agent": "strategy_developer"
-        }
+        return self.run(prompt)
     
-    return risk_manager_node
+    def develop_strategy(self, market_state: str, existing_strategies: List[str] = None) -> str:
+        """策略開發專用"""
+        strategies = existing_strategies or ["無"]
+        prompt = f"""市場環境：{market_state}
 
-
-def create_strategy_developer_node():
-    """創建策略開發 Agent 節點"""
-    def strategy_developer_node(state: AgentState) -> AgentState:
-        config = AgentConfig(
-            role=AgentRole.STRATEGY_DEVELOPER,
-            system_prompt=AGENT_PROMPTS[AgentRole.STRATEGY_DEVELOPER]
-        )
-        llm = get_llm(config)
-        
-        messages = state.get("messages", [])
-        context = "\n".join([m.content for m in messages[-2:]]) if len(messages) >= 2 else "無上下文"
-        
-        prompt = f"""根據以下分析：
-{context}
+現有策略：{', '.join(strategies)}
 
 請提出策略建議。"""
-        
-        response = llm.invoke(prompt)
-        
-        return {
-            "messages": [response],
-            "strategy_proposal": {"strategy": response.content, "params": {}},
-            "next_agent": "backtester"
-        }
+        return self.run(prompt)
     
-    return strategy_developer_node
-
-
-def create_backtester_node():
-    """創建回測 Agent 節點"""
-    def backtester_node(state: AgentState) -> AgentState:
-        config = AgentConfig(
-            role=AgentRole.BACKTESTER,
-            system_prompt=AGENT_PROMPTS[AgentRole.BACKTESTER]
-        )
-        llm = get_llm(config)
-        
-        strategy = state.get("strategy_proposal", {}).get("strategy", "無策略")
-        
-        prompt = f"""對以下策略進行回測評估：
+    def backtest(self, strategy: str, timeframe: str = "過去30天") -> str:
+        """回測專用"""
+        prompt = f"""對以下策略進行回測：
 {strategy}
 
-請提供回測結果（可以使用模擬數據）。"""
-        
-        response = llm.invoke(prompt)
-        
-        return {
-            "messages": [response],
-            "backtest_result": {"result": response.content, "passed": True},
-            "next_agent": "reporter"
-        }
+回測期間：{timeframe}
+
+請提供回測結果。"""
+        return self.run(prompt)
     
-    return backtester_node
+    def write_code(self, requirement: str) -> str:
+        """工程師專用"""
+        prompt = f"""需求：{requirement}
+
+請提供代碼實現。"""
+        return self.run(prompt)
+    
+    def generate_report(self, agent_results: Dict[str, str]) -> str:
+        """彙報專用"""
+        results_str = "\n".join([f"## {agent}\n{result}" for agent, result in agent_results.items()])
+        prompt = f"""根據以下分析結果，生成最終報告：
+
+{results_str}
+
+請生成執行摘要。"""
+        return self.run(prompt)
 
 
-def create_reporter_node():
-    """創建彙報 Agent 節點"""
-    def reporter_node(state: AgentState) -> AgentState:
-        config = AgentConfig(
-            role=AgentRole.REPORTER,
-            system_prompt=AGENT_PROMPTS[AgentRole.REPORTER]
-        )
-        llm = get_llm(config)
-        
-        messages = state.get("messages", [])
-        all_analysis = "\n".join([m.content for m in messages])
-        
-        prompt = f"""根據以下所有分析，生成最終報告：
-{all_analysis}
+# ==================== 便捷函數 ====================
 
-請生成簡潔的執行摘要。"""
-        
-        response = llm.invoke(prompt)
-        
-        return {
-            "messages": [response],
-            "final_report": response.content
-        }
-    
-    return reporter_node
+def create_agent(role: AgentRole, model: str = "minimax/minimax-chat") -> AgentExecutor:
+    """建立獨立 Agent"""
+    return AgentExecutor(role, model)
 
 
-def should_continue(state: AgentState) -> str:
-    """決定是否繼續流程"""
-    next_agent = state.get("next_agent", "")
-    if next_agent == "reporter":
-        return "reporter"
-    return next_agent
-
-
-def create_trading_workflow() -> StateGraph:
-    """創建完整的交易決策工作流"""
-    
-    # 創建圖
-    workflow = StateGraph(AgentState)
-    
-    # 添加節點
-    workflow.add_node("market_monitor", create_market_monitor_node())
-    workflow.add_node("risk_manager", create_risk_manager_node())
-    workflow.add_node("strategy_developer", create_strategy_developer_node())
-    workflow.add_node("backtester", create_backtester_node())
-    workflow.add_node("reporter", create_reporter_node())
-    
-    # 設置入口點
-    workflow.set_entry_point("market_monitor")
-    
-    # 添加條件邊
-    workflow.add_conditional_edges(
-        "market_monitor",
-        should_continue,
-        {
-            "risk_manager": "risk_manager"
-        }
-    )
-    
-    workflow.add_conditional_edges(
-        "risk_manager",
-        should_continue,
-        {
-            "strategy_developer": "strategy_developer"
-        }
-    )
-    
-    workflow.add_conditional_edges(
-        "strategy_developer",
-        should_continue,
-        {
-            "backtester": "backtester"
-        }
-    )
-    
-    workflow.add_conditional_edges(
-        "backtester",
-        should_continue,
-        {
-            "reporter": "reporter"
-        }
-    )
-    
-    # 設置結束點
-    workflow.add_edge("reporter", END)
-    
-    return workflow
-
-
-def run_trading_workflow(market_data: dict) -> dict:
-    """運行交易決策工作流"""
-    workflow = create_trading_workflow()
-    app = workflow.compile()
-    
-    # 初始化狀態
-    initial_state = {
-        "messages": [],
-        "market_data": market_data,
-        "risk_assessment": {},
-        "strategy_proposal": {},
-        "backtest_result": {},
-        "code_output": "",
-        "final_report": "",
-        "next_agent": ""
-    }
-    
-    # 運行
-    result = app.invoke(initial_state)
-    
-    return result
-
-
-# 便捷函數：快速運行單一類型分析
-async def analyze_market(market_data: dict, api_key: str) -> str:
-    """快速市場分析"""
-    import os
-    os.environ["OPENROUTER_API_KEY"] = api_key
-    
-    config = AgentConfig(
-        role=AgentRole.MARKET_MONITOR,
-        system_prompt=AGENT_PROMPTS[AgentRole.MARKET_MONITOR]
-    )
-    llm = get_llm(config)
-    
-    response = llm.invoke(f"分析以下市場數據：{market_data}")
-    return response.content
+def run_single_agent(role: AgentRole, prompt: str, model: str = "minimax/minimax-chat") -> str:
+    """快速運行單一 Agent"""
+    agent = create_agent(role, model)
+    return agent.run(prompt)
