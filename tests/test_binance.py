@@ -125,17 +125,21 @@ class TestConvenienceFunctions:
 
     def test_datetime_to_timestamp(self):
         """測試 datetime 轉 timestamp"""
-        from datetime import datetime
-        dt = datetime(2023, 1, 1, 0, 0, 0)
+        from datetime import datetime, timezone
+        # Use timezone-aware datetime to avoid local timezone issues
+        dt = datetime(2023, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
         ts = datetime_to_timestamp(dt)
         assert ts == 1672531200000
 
     def test_timestamp_to_datetime(self):
         """測試 timestamp 轉 datetime"""
+        from datetime import timezone
         dt = timestamp_to_datetime(1672531200000)
         assert dt.year == 2023
         assert dt.month == 1
         assert dt.day == 1
+        # Should be UTC
+        assert dt.tzinfo == timezone.utc
 
 
 class TestDownloadToCsv:

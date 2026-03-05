@@ -452,9 +452,15 @@ def download_klines_range(
 
 def datetime_to_timestamp(dt: datetime) -> int:
     """將 datetime 轉換為 Unix timestamp（毫秒）"""
+    # 如果沒有時區資訊，假设为 UTC
+    if dt.tzinfo is None:
+        from datetime import timezone
+        dt = dt.replace(tzinfo=timezone.utc)
     return int(dt.timestamp() * 1000)
 
 
 def timestamp_to_datetime(ts: int) -> datetime:
     """將 Unix timestamp（毫秒）轉換為 datetime"""
-    return datetime.fromtimestamp(ts / 1000)
+    # 返回 UTC 時區的 datetime
+    from datetime import timezone
+    return datetime.fromtimestamp(ts / 1000, tz=timezone.utc)
