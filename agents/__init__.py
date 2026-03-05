@@ -48,14 +48,14 @@ AGENT_DEFAULT_MODELS = {
         "reason": "快速理解市場數據，成本低",
     },
     "strategy": {
-        "model": "openai/gpt-4-turbo",
+        "model": "minimax/minimax-chat",
         "task": "strategy_development",
-        "reason": "需要創意和技術能力",
+        "reason": "創意和技術能力",
     },
     "risk": {
-        "model": "anthropic/claude-3-sonnet",
+        "model": "minimax/minimax-chat",
         "task": "risk_assessment",
-        "reason": "需要謹慎推理",
+        "reason": "謹慎推理",
     },
     "backtester": {
         "model": "minimax/minimax-chat",
@@ -63,9 +63,9 @@ AGENT_DEFAULT_MODELS = {
         "reason": "數據處理為主",
     },
     "engineer": {
-        "model": "openai/gpt-4-turbo",
+        "model": "minimax/minimax-chat",
         "task": "code_generation",
-        "reason": "精確代碼生成",
+        "reason": "代碼生成",
     },
     "reporter": {
         "model": "minimax/minimax-chat",
