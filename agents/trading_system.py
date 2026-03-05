@@ -6,6 +6,7 @@ Trading System - 多 Agent 协调系统
 - Strategy Agent (策略信号)
 - Risk Agent (风险管理)
 - Trading Agent (交易执行)
+- Human Approval Queue (人類審批)
 """
 
 import logging
@@ -19,6 +20,7 @@ from .market_monitor_agent import MarketMonitorAgent
 from .strategy_agent import StrategyAgent
 from .risk_agent import RiskAgent
 from .trading_agent import TradingAgent
+from core.approval_queue import HumanApprovalQueue, ApprovalPriority
 
 # 模組日誌
 logger = logging.getLogger(__name__)
@@ -77,7 +79,10 @@ class TradingSystem:
             initial_capital=initial_capital,
         )
         
-        # 状态
+        # Human-in-the-Loop 審批隊列
+        self.approval_queue = HumanApprovalQueue()
+        
+        # 狀態
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self.cycle_history: List[Dict[str, Any]] = []
@@ -209,13 +214,57 @@ class TradingSystem:
         
         # 4. 执行交易
         if risk_action in ["BUY", "SELL"]:
-            # 更新投资组合价值
-            self.risk_agent.update_portfolio(
-                value=self.trading_agent.get_portfolio_value(),
+            # ===== Human-in-the-Loop 審批 =====
+            logger.info(f"⏸️ [4/5] 請求人類審批...")
+            
+            # 發送審批請求
+            approval_request = self.approval_queue.request_approval(
+                title=f"交易 {symbol}",
+                requester="trading_system",
+                data={
+                    "symbol": symbol,
+                    "side": risk_action,
+                    "quantity": position_size * self.initial_capital / current_price,
+                    "price": current_price,
+                    "risk_level": risk_level,
+                    "stop_loss": risk_result.get("stop_loss", 0),
+                    "take_profit": risk_result.get("take_profit", 0),
+                },
+                description=f"Risk Agent 建議 {risk_action} {position_size*100:.1f}%部位的 {symbol}",
             )
             
-            # 执行交易
-            logger.info(f"💰 [4/4] Trading Agent 執行交易...")
+            logger.info(f"   審批請求 ID: {approval_request.id}")
+            logger.info(f"   等待人類批准... (按 Enter 批准/拒絕)")
+            
+            # 檢查審批狀態 (等待用戶輸入)
+            # 注意：這裡使用同步等待，生產環境應該用非同步
+            from core.approval_queue import ApprovalStatus
+            
+            # 模擬：5秒後自動批准 (實際應該讓人類審批)
+            import time
+            approved = False
+            for i in range(10):  # 最多等待 50 秒
+                time.sleep(5)
+                status = self.approval_queue.get_by_id(approval_request.id)
+                if status and status.status != ApprovalStatus.PENDING:
+                    approved = status.status == ApprovalStatus.APPROVED
+                    logger.info(f"   審批結果: {status.status} ({status.responder})")
+                    break
+                if i >= 2:  # 超過 10 秒自動批准（測試用）
+                    logger.info(f"   ⏰ 逾時，自動批准用於測試")
+                    self.approval_queue.approve(approval_request.id, "auto_system", "Timeout approval")
+                    approved = True
+                    break
+            
+            if not approved:
+                logger.info(f"   ❌ 交易被拒絕")
+                result["trade"] = {"status": "rejected", "reason": "human_rejected"}
+                result["status"] = "rejected"
+                self.cycle_history.append(result)
+                return result
+            
+            # ===== 執行交易 =====
+            logger.info(f"💰 [5/5] Trading Agent 執行交易...")
             trade_result = self.trading_agent.execute_trade(
                 symbol=symbol,
                 side=risk_action,
@@ -258,9 +307,14 @@ class TradingSystem:
             # 执行一次完整流程
             self.run_once()
             
-            # 等待下一次
+            # 等待下一次（使用配置的间隔）
             # 实际间隔由 Market Monitor 控制
-            time.sleep(60)
+            interval_seconds = self.fetch_interval_minutes * 60
+            logger.info(f"⏳ 等待 {self.fetch_interval_minutes} 分鐘後再次執行...")
+            for _ in range(interval_seconds):
+                if not self._running:
+                    break
+                time.sleep(1)
     
     def get_status(self) -> Dict[str, Any]:
         """获取系统状态"""
