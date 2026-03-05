@@ -258,7 +258,7 @@ summary = result["summary"]
 ## 🧪 測試
 
 ```bash
-pytest tests/ -v
+python -m pytest tests/ -v
 ```
 
 ## 📝 設計取捨說明
