@@ -1,183 +1,155 @@
 # Crypto Backtester - Project Architecture
 
+## 系統架構總覽
+
 ```mermaid
 flowchart TB
-    subgraph Data["📂 Data Module"]
+    subgraph Core["🎯 Core - 事件驅動核心"]
         direction TB
-        Binance[binance.py<br/>Binance API Download]
+        MB[message_bus.py<br/>Message Bus]
+        WF[workflow.py<br/>Workflow Engine]
+        AQ[approval_queue.py<br/>Human Approval]
+        AR[agent_registry.py<br/>Agent Registry]
+        EDA[event_driven_agent.py<br/>Event-Driven Agent]
+    end
+
+    subgraph Data["📂 Data Module"]
+        Binance[binance.py<br/>Binance API]
         Loader[loader.py<br/>CSV Loader]
     end
 
-    subgraph Strategies["📊 Strategies Module"]
-        direction TB
-        Base[strategies/base.py<br/>BaseStrategy]
-        MA[strategies/ma_crossover.py<br/>MACrossoverStrategy]
+    subgraph Strategies["📊 Strategies"]
+        MA[ma_crossover.py<br/>MA Crossover]
     end
 
-    subgraph Backtest["⚡ Backtest Engine"]
-        direction TB
-        Engine[backtest/engine.py<br/>BacktestEngine]
+    subgraph Agents["🤖 Multi-Agent System"]
+        Market[agents/market_monitor_agent.py<br/>Market Monitor]
+        Strategy[agents/strategy_agent.py<br/>Strategy]
+        Risk[agents/risk_agent.py<br/>Risk]
+        Trading[agents/trading_agent.py<br/>Trading]
     end
 
-    subgraph Metrics["📈 Metrics Module"]
-        direction TB
-        Perf[metrics/performance.py<br/>Performance Metrics]
+    subgraph VSS["👁️ VSS Module"]
+        VSS_An[vss/analyzer.py]
+        VSS_Ob[vss/observer.py]
     end
 
-    subgraph Reports["📄 Reports Module"]
-        direction TB
-        Output[reports/output.py<br/>CSV/MD Export]
+    subgraph Alignment["🎯 Alignment"]
+        Eval[alignment/evaluator.py]
+        Rec[alignment/recorder.py]
     end
 
-    subgraph Experiments["🔬 Experiments Module"]
-        direction TB
-        Grid[experiments/grid_search.py<br/>Grid Search]
-        Walk[experiments/walk_forward.py<br/>Walk-Forward]
-    end
-
-    subgraph VSS["👁️ VSS Module - Market Analysis"]
-        direction TB
-        VSS_Types[vss/types.py<br/>Type Definitions]
-        VSS_Analyzer[vss/analyzer.py<br/>Market Analyzer]
-        VSS_Observer[vss/observer.py<br/>Real-time Observer]
-    end
-
-    subgraph Alignment["🎯 Alignment Module - Human-AI"]
-        direction TB
-        Align_Types[alignment/types.py<br/>Decision Types]
-        Align_Eval[alignment/evaluator.py<br/>Alignment Evaluator]
-        Align_Rec[alignment/recorder.py<br/>Decision Recorder]
-        Align_Ctrl[alignment/controller.py<br/>Decision Controller]
-    end
-
-    subgraph Agents["🤖 Multi-Agent Trading System"]
-        direction TB
-        MarketMonitor[agents/market_monitor_agent.py<br/>Market Monitor]
-        Strategy[agents/strategy_agent.py<br/>Strategy Agent]
-        Risk[agents/risk_agent.py<br/>Risk Agent]
-        Trading[agents/trading_agent.py<br/>Trading Agent]
-        System[agents/trading_system.py<br/>Trading System]
-    end
-
-    subgraph Configs["⚙️ Configuration"]
-        direction TB
-        Config[configs/backtest_config.py<br/>Config]
-    end
-
-    %% Data Flow
-    Binance --> Loader
-    Loader --> Strategies
-    Strategies --> Backtest
-    Backtest --> Metrics
-    Metrics --> Reports
-    Metrics --> Experiments
-    Experiments --> Backtest
-
-    %% Integration with Advanced Modules
-    Data --> VSS_Observer
-    VSS_Observer --> VSS_Analyzer
-    VSS_Analyzer --> Align_Ctrl
+    %% 核心連接
+    MB --> WF
+    MB --> AQ
+    MB --> AR
+    EDA --> MB
     
-    Align_Ctrl --> Align_Eval
-    Align_Eval --> Align_Rec
-    Align_Rec --> Align_Types
-    
-    VSS_Analyzer --> Agent_Workflow
-    Agent_Workflow --> Agent_Example
-
-    %% Trading System Flow
-    Binance --> MarketMonitor
-    MarketMonitor --> Strategy
-    Strategy --> Risk
-    Risk --> Trading
-    Trading --> System
-
-    %% Styling
-    classDef module fill:#e1f5fe,stroke:#01579b,stroke-width:2px
-    classDef core fill:#fff3e0,stroke:#e65100,stroke-width:3px
-    classDef advanced fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
-    classDef agents fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
-    
-    class Data,Strategies,Backtest,Metrics,Reports,Experiments,Configs module
-    class Binance,Loader,Engine,Perf,Output,Grid,Walk core
-    class VSS,Alignment,Agents advanced
-    class MarketMonitor,Strategy,Risk,Trading,System agents
+    %% Agent 連接
+    Binance --> Market
+    Market --> MB
+    MB --> Strategy
+    MB --> Risk
+    Strategy --> MB
+    Risk --> MB
+    Risk --> AQ
+    AQ --> MB
+    MB --> Trading
 ```
 
-## Multi-Agent Trading Flow
+## Event-Driven Flow
 
 ```mermaid
 sequenceDiagram
-    participant User
-    participant System as Trading System
+    participant Bus as Message Bus
     participant Market as Market Monitor
     participant Strategy as Strategy Agent
     participant Risk as Risk Agent
+    participant Human as Human
     participant Trading as Trading Agent
     
-    User->>System: start()
-    System->>Market: start() 啟動定時抓取
-    Market->>Market: 每小時抓取最新資料
+    Market->>Bus: 發布: new_market_data
+    Bus->>Strategy: 傳遞: new_market_data
     
-    loop 每個週期
-        System->>Market: get_latest_data()
-        Market-->>System: 回傳 DataFrame
-        
-        System->>Strategy: get_signal()
-        Strategy-->>System: signal + metrics
-        
-        System->>Risk: evaluate_trade()
-        Risk-->>System: risk decision
-        
-        alt 風險允許交易
-            System->>Trading: execute_trade()
-            Trading-->>System: trade result
-        else 風險過高
-            System->>System: skip trade
-        end
-        
-        System->>User: 回傳結果
+    Strategy->>Bus: 發布: signal_generated
+    Bus->>Risk: 傳遞: signal
+    
+    Risk->>Bus: 發布: risk_assessment
+    Bus->>Human: 需要審批?
+    
+    alt 需要審批
+        Human->>Bus: 批准/拒絕
     end
+    
+    Bus->>Trading: 執行交易
+    Trading->>Bus: 發布: trade_executed
 ```
 
-## Agent Responsibilities
-
-| Agent | 職責 | 輸入 | 輸出 |
-|-------|------|------|------|
-| **Market Monitor** | 定時抓取資料 | Binance API | CSV/DB |
-| **Strategy** | 產生訊號 | 歷史資料 | buy/sell/hold |
-| **Risk** | 風險評估 | 訊號+市場資料 | 執行決定 |
-| **Trading** | 執行交易 | 風險決定 | 訂單結果 |
-| **System** | 協調所有 Agent | - | 完整流程 |
-
-## Module Dependencies
+## Human-in-the-Loop
 
 ```mermaid
 flowchart LR
-    subgraph Input["Inputs"]
-        Binance
+    subgraph Rules["審批規則"]
+        R1[金額 > $10,000]
+        R2[連續虧損 > 5次]
+        R3[日交易 > 20次]
+        R4[總虧損 > $5,000]
     end
     
-    subgraph Core["Core Pipeline"]
-        Loader --> Strategies --> Backtest --> Metrics --> Reports
+    subgraph Queue["Approval Queue"]
+        Req[審批請求]
+        Wait[等待人類]
+        Decision[批准/拒絕]
     end
     
-    subgraph Research["Research"]
-        Metrics --> Grid
-        Grid --> Walk
-        Walk -.->|optimize| Strategies
-    end
+    R1 --> Req
+    Req --> Wait
+    Wait --> Decision
     
-    subgraph Advanced["Advanced Features"]
-        VSS_Observer --> VSS_Analyzer
-        VSS_Analyzer --> Alignment
-        Alignment --> Agents
-    end
-    
-    Input --> Core
-    Core --> Research
-    Core --> Advanced
+    Decision -->|通過| Trading[執行交易]
+    Decision -->|拒絕| Skip[跳過交易]
 ```
+
+## 動態 Workflow 配置
+
+```yaml
+# workflow.yaml
+name: trading_workflow
+entry_point: market_monitor
+
+nodes:
+  - name: market_monitor
+    agent_type: market_monitor
+    actions:
+      - type: publish
+        event: new_market_data
+    
+  - name: strategy
+    agent_type: strategy
+    actions:
+      - type: publish
+        event: signal_generated
+    
+  - name: risk_check
+    agent_type: risk
+    conditions:
+      - type: gt
+        field: amount
+        value: 10000
+    actions:
+      - type: approval
+        threshold: 10000
+```
+
+## 功能對照表
+
+| 模組 | 功能 | 實現 |
+|------|------|------|
+| Message Bus | 事件發布/訂閱 | `core/message_bus.py` |
+| Workflow | 動態流程配置 | `core/workflow.py` |
+| Approval Queue | 人類審批 | `core/approval_queue.py` |
+| Agent Registry | Agent 註冊發現 | `core/agent_registry.py` |
+| Event-Driven Agent | Agent 基底類別 | `core/event_driven_agent.py` |
 
 ## Agent Workflow
 
