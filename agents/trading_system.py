@@ -59,6 +59,7 @@ class TradingSystem:
         self.intervals = intervals
         self.initial_capital = initial_capital
         self.mode = mode
+        self.fetch_interval_minutes = fetch_interval_minutes
         
         # 初始化所有 Agents
         self.market_monitor = MarketMonitorAgent(
