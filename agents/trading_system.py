@@ -84,8 +84,11 @@ class TradingSystem:
         
         # 狀態
         self._running = False
+        self._paused = False
         self._thread: Optional[threading.Thread] = None
+        self._control_thread: Optional[threading.Thread] = None
         self.cycle_history: List[Dict[str, Any]] = []
+        self._command_queue: List[Dict[str, Any]] = []
         
         # 回调
         self.on_trade: Optional[Callable] = None
@@ -107,14 +110,40 @@ class TradingSystem:
         self.market_monitor.start()
         
         self._running = True
+        self._paused = False
+        
+        # 启动命令控制线程
+        self._control_thread = threading.Thread(target=self._command_loop, daemon=True)
+        self._control_thread.start()
+        
         self._thread = threading.Thread(target=self._run_loop, daemon=True)
         self._thread.start()
         
         print("✅ 交易系统已启动")
+        self._print_help()
+    
+    def _print_help(self):
+        """打印帮助信息"""
+        print("""
+╔══════════════════════════════════════════════════════════╗
+║              命令列控制 (Command Help)                  ║
+╠══════════════════════════════════════════════════════════╣
+║  help     - 显示这则讯息                                 ║
+║  pause    - 暂停交易系统                                 ║
+║  resume   - 恢复交易系统                                 ║
+║  status   - 显示目前状态                                 ║
+║  run      - 立即执行一次交易流程                          ║
+║  force buy <symbol> <pct> - 强制买入                    ║
+║  force sell <symbol> <pct> - 强制卖出                   ║
+║  stop     - 停止交易系统                                 ║
+║  history  - 显示交易历史                                 ║
+║  orders   - 显示待审批订单                               ║
+╚══════════════════════════════════════════════════════════╝
+        """)
     
     def stop(self) -> None:
         """停止交易系统"""
-        print("🛑 停止交易系统...")
+        print("🛑 停止交易系統...")
         
         self._running = False
         self.market_monitor.stop()
@@ -122,7 +151,101 @@ class TradingSystem:
         if self._thread:
             self._thread.join(timeout=5)
         
-        print("✅ 系统已停止")
+        print("✅ 系統已停止")
+    
+    def _command_loop(self):
+        """命令輸入循環"""
+        import sys
+        import select
+        
+        print("\n💬 輸入命令後按 Enter...")
+        
+        while self._running:
+            try:
+                if sys.platform == 'win32':
+                    import msvcrt
+                    if msvcrt.kbhit():
+                        cmd = sys.stdin.readline().strip()
+                        self._process_command(cmd)
+                else:
+                    if select.select([sys.stdin], [], [], 1)[0]:
+                        cmd = sys.stdin.readline().strip()
+                        if cmd:
+                            self._process_command(cmd)
+                time.sleep(0.1)
+            except Exception as e:
+                logger.error(f"命令處理錯誤: {e}")
+    
+    def _process_command(self, cmd: str):
+        """處理用戶命令"""
+        parts = cmd.strip().lower().split()
+        if not parts:
+            return
+        
+        command = parts[0]
+        
+        if command == "help":
+            self._print_help()
+        
+        elif command == "pause":
+            self._paused = True
+            print("⏸️ 系統已暫停")
+        
+        elif command == "resume":
+            self._paused = False
+            print("▶️ 系統已恢復")
+        
+        elif command == "status":
+            status = self.get_status()
+            print(f"""
+📊 系統狀態:
+   運行中: {status['running']}
+   已暫停: {self._paused}
+   交易對: {status['symbols']}
+   模式: {status['mode']}
+   執行次數: {status['cycles']}
+   倉位價值: ${self.trading_agent.get_portfolio_value():,.2f}
+            """)
+        
+        elif command == "run":
+            print("🔄 執行一次交易流程...")
+            self.run_once()
+        
+        elif command == "stop":
+            print("🛑 收到停止命令")
+            self.stop()
+        
+        elif command == "history":
+            print("\n📜 交易歷史:")
+            for i, h in enumerate(self.cycle_history[-10:], 1):
+                print(f"  {i}. {h.get('symbol')} | {h.get('signal_text')} | {h.get('risk_action')} | {h.get('status')}")
+        
+        elif command == "orders":
+            pending = self.approval_queue.get_pending()
+            print(f"\n📋 待審批訂單: {len(pending)} 筆")
+            for p in pending:
+                print(f"  - {p.id}: {p.title} ({p.status})")
+        
+        elif command in ["force", "buy", "sell"]:
+            if len(parts) >= 3 and parts[1] in ["buy", "sell"]:
+                side = parts[1].upper()
+                symbol = parts[2].upper()
+                try:
+                    pct = float(parts[3]) / 100 if len(parts) > 3 else 0.1
+                    self._command_queue.append({
+                        "action": "force_trade",
+                        "side": side,
+                        "symbol": symbol,
+                        "pct": pct,
+                    })
+                    print(f"⚡ 已加入強制{side}命令: {symbol} {pct*100:.0f}%")
+                except:
+                    print("❌ 指令格式錯誤: force buy BTCUSDT 50")
+            else:
+                print("❌ 指令格式錯誤: force buy BTCUSDT 50")
+        
+        else:
+            print(f"❌ 未知命令: {command} (輸入 help 查看)")
     
     def run_once(self) -> Dict[str, Any]:
         """
@@ -304,17 +427,57 @@ class TradingSystem:
     def _run_loop(self):
         """运行循环"""
         while self._running:
+            # 检查暂停状态
+            if self._paused:
+                logger.info("⏸️ 系統已暫停，等待恢復...")
+                time.sleep(5)
+                continue
+            
+            # 检查命令队列 - 处理强制交易命令
+            while self._command_queue:
+                cmd = self._command_queue.pop(0)
+                if cmd.get("action") == "force_trade":
+                    self._execute_force_trade(cmd)
+            
             # 执行一次完整流程
             self.run_once()
             
             # 等待下一次（使用配置的间隔）
-            # 实际间隔由 Market Monitor 控制
             interval_seconds = self.fetch_interval_minutes * 60
             logger.info(f"⏳ 等待 {self.fetch_interval_minutes} 分鐘後再次執行...")
             for _ in range(interval_seconds):
-                if not self._running:
+                if not self._running or self._paused:
                     break
                 time.sleep(1)
+    
+    def _execute_force_trade(self, cmd: Dict[str, Any]):
+        """执行强制交易"""
+        symbol = cmd.get("symbol", "BTCUSDT")
+        side = cmd.get("side", "BUY")
+        pct = cmd.get("pct", 0.1)
+        
+        logger.info(f"⚡ 執行強制交易: {side} {symbol} {pct*100:.0f}%")
+        
+        # 获取当前价格
+        data = self.market_monitor.get_latest_data(symbol, "1h")
+        if data is None or data.empty:
+            logger.warning(f"⚠️ 無法獲取 {symbol} 數據")
+            return
+        
+        current_price = float(data["close"].iloc[-1])
+        quantity = pct * self.initial_capital / current_price
+        
+        # 直接执行交易
+        result = self.trading_agent.execute_trade(
+            symbol=symbol,
+            side=side,
+            quantity=quantity,
+            price=current_price,
+            stop_loss=0,
+            take_profit=0,
+        )
+        
+        logger.info(f"   強制交易結果: {result.get('status', 'unknown')}")
     
     def get_status(self) -> Dict[str, Any]:
         """获取系统状态"""
