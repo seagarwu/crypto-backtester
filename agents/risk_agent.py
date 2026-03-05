@@ -120,7 +120,7 @@ class RiskAgent:
         risk_level = self._determine_risk_level(
             volatility=volatility,
             max_drawdown=max_dd,
-            var=var_95,
+            var_95=var_95,
         )
         
         self.current_risk_level = risk_level
