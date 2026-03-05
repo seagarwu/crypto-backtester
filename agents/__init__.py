@@ -1,9 +1,25 @@
 """多智能體系統 - Agent 工廠與基礎設施"""
 
+import logging
+import sys
 from typing import Optional, Dict, Any, List
 from dataclasses import dataclass, field
 from enum import Enum
 import os
+
+# 設置日誌格式
+def setup_logging(level: int = logging.INFO):
+    """設置全局日誌"""
+    logging.basicConfig(
+        level=level,
+        format='%(asctime)s | %(levelname)-8s | %(name)s | %(message)s',
+        datefmt='%H:%M:%S',
+        handlers=[logging.StreamHandler(sys.stdout)]
+    )
+    return logging.getLogger(__name__)
+
+# 預設日誌
+logger = setup_logging()
 
 # LangGraph imports
 from langgraph.graph import StateGraph, END

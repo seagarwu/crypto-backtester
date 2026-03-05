@@ -8,10 +8,13 @@ Trading Agent - 交易执行 Agent
 4. 管理持仓
 """
 
+import logging
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 from dataclasses import dataclass, field
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass

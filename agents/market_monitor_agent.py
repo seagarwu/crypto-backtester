@@ -8,6 +8,7 @@ Market Monitor Agent - 市場資料監控 Agent
 4. 通知其他 Agents 有新資料
 """
 
+import logging
 import os
 import time
 import threading
@@ -23,6 +24,8 @@ from data.binance import (
     datetime_to_timestamp,
     parse_interval_to_ms,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class MarketDataManager:

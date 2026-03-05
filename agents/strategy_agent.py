@@ -7,6 +7,7 @@ Strategy Agent - 策略信号产生 Agent
 3. 与 Market Monitor Agent 协作获取数据
 """
 
+import logging
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 import pandas as pd
@@ -16,6 +17,8 @@ from strategies.base import BaseStrategy
 from strategies.ma_crossover import MACrossoverStrategy
 from backtest import run_backtest
 from metrics import calculate_metrics
+
+logger = logging.getLogger(__name__)
 
 
 class StrategySelector:

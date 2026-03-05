@@ -8,6 +8,7 @@ Trading System - 多 Agent 协调系统
 - Trading Agent (交易执行)
 """
 
+import logging
 from typing import Optional, Dict, Any, List, Callable
 from datetime import datetime
 import pandas as pd
@@ -18,6 +19,9 @@ from .market_monitor_agent import MarketMonitorAgent
 from .strategy_agent import StrategyAgent
 from .risk_agent import RiskAgent
 from .trading_agent import TradingAgent
+
+# 模組日誌
+logger = logging.getLogger(__name__)
 
 
 class TradingSystem:
@@ -143,21 +147,39 @@ class TradingSystem:
             "interval": interval,
         }
         
+        logger.info("=" * 50)
+        logger.info(f"🔄 開始處理: {symbol} {interval}")
+        logger.info("=" * 50)
+        
         # 1. 获取数据
+        logger.info(f"📥 [1/4] 獲取市場數據...")
         data = self.market_monitor.get_latest_data(symbol, interval)
         
         if data is None or data.empty:
+            logger.warning(f"⚠️ 無法獲取數據: {symbol}")
             result["status"] = "no_data"
             return result
+        
+        current_price = float(data["close"].iloc[-1])
+        logger.info(f"   最新價格: ${current_price:,.2f} | 數據筆數: {len(data)}")
         
         result["data_rows"] = len(data)
         
         # 2. Strategy Agent 产生信号
+        logger.info(f"📈 [2/4] Strategy Agent 分析中...")
         signal_result = self.strategy_agent.get_signal(symbol, interval)
         
-        result["signal"] = signal_result.get("signal", 0)
-        result["signal_text"] = signal_result.get("signal_text", "HOLD")
-        result["best_strategy"] = signal_result.get("best_strategy")
+        signal = signal_result.get("signal", 0)
+        signal_text = signal_result.get("signal_text", "HOLD")
+        best_strategy = signal_result.get("best_strategy")
+        
+        logger.info(f"   信號: {signal_text} ({signal})")
+        if best_strategy:
+            logger.info(f"   策略: {best_strategy}")
+        
+        result["signal"] = signal
+        result["signal_text"] = signal_text
+        result["best_strategy"] = best_strategy
         result["strategy_metrics"] = signal_result.get("metrics", {})
         
         # 回调
@@ -165,52 +187,67 @@ class TradingSystem:
             self.on_signal(symbol, signal_result)
         
         # 3. Risk Agent 评估
+        logger.info(f"🛡️ [3/4] Risk Agent 風險評估...")
         risk_result = self.risk_agent.evaluate_trade(
-            signal=signal_result.get("signal", 0),
+            signal=signal,
             market_data=data,
             strategy_metrics=signal_result.get("metrics", {}),
         )
         
-        result["risk_action"] = risk_result.get("action")
-        result["risk_level"] = risk_result.get("risk_level")
-        result["position_size"] = risk_result.get("position_size", 0)
+        risk_action = risk_result.get("action")
+        risk_level = risk_result.get("risk_level")
+        position_size = risk_result.get("position_size", 0)
+        
+        logger.info(f"   風險等級: {risk_level}")
+        logger.info(f"   決策: {risk_action}")
+        if position_size > 0:
+            logger.info(f"   部位大小: {position_size:.4f} ({position_size * 100:.1f}%)")
+        
+        result["risk_action"] = risk_action
+        result["risk_level"] = risk_level
+        result["position_size"] = position_size
         
         # 4. 执行交易
-        if risk_result.get("action") in ["BUY", "SELL"]:
-            # 获取当前价格
-            current_price = float(data["close"].iloc[-1])
-            
+        if risk_action in ["BUY", "SELL"]:
             # 更新投资组合价值
             self.risk_agent.update_portfolio(
                 value=self.trading_agent.get_portfolio_value(),
             )
             
             # 执行交易
+            logger.info(f"💰 [4/4] Trading Agent 執行交易...")
             trade_result = self.trading_agent.execute_trade(
                 symbol=symbol,
-                side=risk_result["action"],
-                quantity=risk_result.get("position_size", 0) * self.initial_capital / current_price,
+                side=risk_action,
+                quantity=position_size * self.initial_capital / current_price,
                 price=current_price,
                 stop_loss=risk_result.get("stop_loss", 0),
                 take_profit=risk_result.get("take_profit", 0),
             )
+            
+            logger.info(f"   交易結果: {trade_result.get('status', 'unknown')}")
+            logger.info(f"   訂單ID: {trade_result.get('order_id', 'N/A')}")
             
             result["trade"] = trade_result
             
             # 回调
             if self.on_trade:
                 self.on_trade(symbol, trade_result)
+        else:
+            logger.info(f"⏭️ 跳過交易 (原因: {risk_action})")
         
         result["status"] = "completed"
         
         # 5. 记录到历史
         self.cycle_history.append(result)
         
+        logger.info(f"✅ 完成處理: {symbol} {interval}")
+        
         return result
     
     def _on_new_data(self, symbol: str, df: pd.DataFrame):
         """新数据回调"""
-        print(f"📊 收到新数据: {symbol} ({len(df)} 行)")
+        logger.info(f"📊 收到新數據: {symbol} ({len(df)} 行)")
         
         # 可以选择立即处理
         # self._process_symbol(symbol, "1h")

@@ -8,10 +8,13 @@ Risk Agent - 风险评估 Agent
 4. 设置止损止盈
 """
 
+import logging
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 import pandas as pd
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 class RiskMetrics:
