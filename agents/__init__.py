@@ -8,9 +8,19 @@ import os
 # LangGraph imports
 from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import create_react_agent
-from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 from langchain_openrouter import ChatOpenRouter
+
+# Core imports
+from core.llm_manager import (
+    LLMManager,
+    get_llm_manager,
+    get_llm,
+    get_llm_for_task,
+    recommend_model,
+    AVAILABLE_MODELS,
+    TASK_MODEL_MAPPING,
+)
 
 # Market Monitor Agent
 from .market_monitor_agent import MarketMonitorAgent, MarketDataManager, create_market_monitor
@@ -26,6 +36,43 @@ from .trading_agent import TradingAgent, Order, Position, create_trading_agent
 
 # Trading System
 from .trading_system import TradingSystem, create_trading_system
+
+
+# ==================== Agent 默認模型配置 ====================
+
+# 根據 Agent 類型，預設推薦的模型
+AGENT_DEFAULT_MODELS = {
+    "market_monitor": {
+        "model": "minimax/minimax-chat",
+        "task": "market_analysis",
+        "reason": "快速理解市場數據，成本低",
+    },
+    "strategy": {
+        "model": "openai/gpt-4-turbo",
+        "task": "strategy_development",
+        "reason": "需要創意和技術能力",
+    },
+    "risk": {
+        "model": "anthropic/claude-3-sonnet",
+        "task": "risk_assessment",
+        "reason": "需要謹慎推理",
+    },
+    "backtester": {
+        "model": "minimax/minimax-chat",
+        "task": "mathematical",
+        "reason": "數據處理為主",
+    },
+    "engineer": {
+        "model": "openai/gpt-4-turbo",
+        "task": "code_generation",
+        "reason": "精確代碼生成",
+    },
+    "reporter": {
+        "model": "minimax/minimax-chat",
+        "task": "report_generation",
+        "reason": "流暢寫作，成本低",
+    },
+}
 
 
 class AgentRole(Enum):
@@ -191,6 +238,14 @@ __all__ = [
     "TradingState",
     "get_llm",
     "AGENT_PROMPTS",
+    # LLM Management
+    "LLMManager",
+    "get_llm_manager",
+    "get_llm_for_task",
+    "recommend_model",
+    "AVAILABLE_MODELS",
+    "TASK_MODEL_MAPPING",
+    "AGENT_DEFAULT_MODELS",
     # Market Monitor
     "MarketMonitorAgent",
     "MarketDataManager",

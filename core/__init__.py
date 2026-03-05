@@ -6,7 +6,7 @@ Core - 核心模組
 - Workflow (工作流配置)
 - Approval Queue (人類審批)
 - Agent Registry (Agent 註冊)
-- Event-Driven Agent (事件驅動 Agent)
+- LLM Manager (模型管理)
 """
 
 from .message_bus import (
@@ -62,6 +62,20 @@ from .event_driven_agent import (
     AsyncEventDrivenAgent,
 )
 
+from .llm_manager import (
+    LLMManager,
+    ModelConfig,
+    ModelProvider,
+    AVAILABLE_MODELS,
+    TASK_MODEL_MAPPING,
+    get_llm_manager,
+    set_llm_manager,
+    get_llm,
+    get_llm_for_task,
+    list_available_models,
+    recommend_model,
+)
+
 
 __all__ = [
     # Message Bus
@@ -107,4 +121,16 @@ __all__ = [
     # Event-Driven Agent
     "EventDrivenAgent",
     "AsyncEventDrivenAgent",
+    # LLM Manager
+    "LLMManager",
+    "ModelConfig",
+    "ModelProvider",
+    "AVAILABLE_MODELS",
+    "TASK_MODEL_MAPPING",
+    "get_llm_manager",
+    "set_llm_manager",
+    "get_llm",
+    "get_llm_for_task",
+    "list_available_models",
+    "recommend_model",
 ]
