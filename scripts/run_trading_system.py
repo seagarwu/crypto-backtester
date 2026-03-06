@@ -300,17 +300,17 @@ def main():
                     if existing_df is not None and not existing_df.empty and not args.force:
                         existing_df['datetime'] = pd.to_datetime(existing_df['datetime'])
                         
-                        # 確保時區一致性
-                        if existing_df['datetime'].dt.tz is None:
-                            existing_df['datetime'] = existing_df['datetime'].dt.tz_localize('UTC')
+                        # 確保時區是 tz-naive (統一時區處理)
+                        if existing_df['datetime'].dt.tz is not None:
+                            existing_df['datetime'] = existing_df['datetime'].dt.tz_localize(None)
                         
                         min_date = existing_df['datetime'].min()
                         max_date = existing_df['datetime'].max()
                         print(f"   ℹ️ 現有數據: {min_date.date()} ~ {max_date.date()} ({len(existing_df)} 筆)")
                         
-                        # 轉換請求的時間範圍 (確保時區一致)
-                        req_start = pd.to_datetime(start_ts, unit='ms', utc=True)
-                        req_end = pd.to_datetime(end_ts, unit='ms', utc=True)
+                        # 轉換請求的時間範圍為 tz-naive
+                        req_start = pd.to_datetime(start_ts, unit='ms')
+                        req_end = pd.to_datetime(end_ts, unit='ms')
                         
                         # 如果現有數據已覆蓋請求範圍，則跳過
                         if min_date <= req_start and max_date >= req_end:
@@ -326,6 +326,17 @@ def main():
                             end_ts = int(new_end.timestamp() * 1000)
                     
                     try:
+                        # 定義存檔回調函數
+                        def save_progress(temp_df):
+                            """定期存檔回調"""
+                            try:
+                                # 嘗試存 parquet
+                                temp_df.to_parquet(output_file, index=False)
+                            except Exception:
+                                # 如果沒有 pyarrow，使用 CSV
+                                csv_file = output_file.replace('.parquet', '.csv')
+                                temp_df.to_csv(csv_file, index=False)
+                        
                         df = download_with_progress(
                             symbol=symbol,
                             interval=interval,
@@ -333,9 +344,15 @@ def main():
                             end_time=end_ts,
                             rate_limit=args.rate_limit,
                             batch_size=args.batch_size,
+                            save_callback=save_progress,
                         )
                         
                         if df is not None and not df.empty:
+                            # 確保 datetime 是 tz-naive
+                            df['datetime'] = pd.to_datetime(df['datetime'])
+                            if df['datetime'].dt.tz is not None:
+                                df['datetime'] = df['datetime'].dt.tz_localize(None)
+                            
                             # 確保 data 目錄存在
                             Path("data").mkdir(exist_ok=True)
                             

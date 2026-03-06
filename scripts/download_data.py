@@ -63,6 +63,8 @@ def download_with_progress(
     end_time: int,
     rate_limit: int = 10,
     batch_size: int = 500,
+    save_interval_seconds: int = 60,
+    save_callback=None,
 ) -> pd.DataFrame:
     """
     帶進度顯示的下載函數
@@ -74,6 +76,8 @@ def download_with_progress(
         end_time: 結束時間戳 (UTC, 毫秒)
         rate_limit: 每分鐘請求次數
         batch_size: 每批數據量
+        save_interval_seconds: 每隔多少秒存檔一次 (預設 60 秒)
+        save_callback: 回調函數，用於存檔 (接收 DataFrame 參數)
     
     Returns:
         DataFrame
@@ -151,6 +155,19 @@ def download_with_progress(
             
             print(f"   批次 {batch_num}: +{len(df)} 筆 | 進度: {progress:.1f}% | 已用時: {format_duration(int(elapsed))}")
             
+            # 定期存檔 (每分鐘)
+            if save_callback and elapsed > 0 and elapsed % save_interval_seconds < 2:
+                # 合併目前的數據
+                temp_df = pd.concat(all_data, ignore_index=True)
+                temp_df = temp_df.drop_duplicates(subset=["datetime"], keep="first")
+                temp_df = temp_df.sort_values("datetime").reset_index(drop=True)
+                temp_df["datetime"] = pd.to_datetime(temp_df["datetime"]).dt.tz_localize(None)
+                try:
+                    save_callback(temp_df)
+                    print(f"   💾 [自動存檔] 已保存 {len(temp_df)} 筆")
+                except Exception as save_err:
+                    print(f"   ⚠️ 自動存檔失敗: {save_err}")
+            
             # 取得下一批的開始時間 (最後一根 K 線的時間 + 1 根)
             last_time = int(pd.Timestamp(df["datetime"].iloc[-1]).timestamp() * 1000)
             current_start = last_time + interval_ms
@@ -173,6 +190,9 @@ def download_with_progress(
     combined = pd.concat(all_data, ignore_index=True)
     combined = combined.drop_duplicates(subset=["datetime"], keep="first")
     combined = combined.sort_values("datetime").reset_index(drop=True)
+    
+    # 確保 datetime 欄位是 tz-naive (統一時區處理)
+    combined["datetime"] = pd.to_datetime(combined["datetime"]).dt.tz_localize(None)
     
     elapsed = (datetime.now(timezone.utc) - start_time_real).total_seconds()
     print(f"   ✅ 完成: {len(combined)} 筆 | 總用時: {format_duration(int(elapsed))} | 平均速率: {request_count/elapsed*60:.1f} 次/分鐘")
