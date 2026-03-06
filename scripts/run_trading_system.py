@@ -284,9 +284,21 @@ def main():
                     
                     # 檢查數據是否已存在
                     output_file = f"data/{symbol}_{interval}.parquet"
-                    if Path(output_file).exists() and not args.force:
-                        existing = pd.read_parquet(output_file)
-                        print(f"   ⚠️ 數據已存在: {output_file} ({len(existing)} 筆)")
+                    csv_file = f"data/{symbol}_{interval}.csv"
+                    
+                    # 檢查 parquet 或 csv
+                    existing_file = None
+                    if Path(output_file).exists():
+                        existing_file = output_file
+                    elif Path(csv_file).exists():
+                        existing_file = csv_file
+                    
+                    if existing_file and not args.force:
+                        if existing_file.endswith('.csv'):
+                            existing = pd.read_csv(existing_file, parse_dates=['datetime'])
+                        else:
+                            existing = pd.read_parquet(existing_file)
+                        print(f"   ⚠️ 數據已存在: {existing_file} ({len(existing)} 筆)")
                         print(f"   使用 --force 強制重新下載")
                         continue
                     
@@ -304,8 +316,16 @@ def main():
                             # 確保 data 目錄存在
                             Path("data").mkdir(exist_ok=True)
                             
-                            # 儲存
-                            df.to_parquet(output_file, index=False)
+                            # 儲存 (支援 parquet 或 csv)
+                            try:
+                                df.to_parquet(output_file, index=False)
+                            except Exception:
+                                # 如果沒有 pyarrow，使用 CSV
+                                csv_file = output_file.replace('.parquet', '.csv')
+                                df.to_csv(csv_file, index=False)
+                                output_file = csv_file
+                                print(f"   ⚠️ 已改用 CSV 格式儲存")
+                            
                             print(f"✅ 已存: {output_file} ({len(df)} 筆)")
                         else:
                             print(f"⚠️ 無數據: {symbol} {interval}")
