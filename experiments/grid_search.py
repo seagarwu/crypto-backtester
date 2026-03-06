@@ -4,13 +4,50 @@
 針對策略參數進行網格掃描，找出最優參數組合。
 """
 
-from typing import List, Dict, Any, Optional, Callable
+from typing import List, Dict, Any
 import pandas as pd
 import numpy as np
 from itertools import product
 
 from backtest import BacktestEngine
 from metrics import calculate_metrics
+
+
+def calculate_practical_score(result_row: Dict[str, Any]) -> float:
+    """
+    計算實盤導向評分
+
+    綜合考量 Sharpe/Sortino/Calmar、獲利因子、
+    最大回撤與交易次數，降低只看單一指標造成的偏差。
+    """
+    required = [
+        "sharpe_ratio",
+        "sortino_ratio",
+        "calmar_ratio",
+        "max_drawdown",
+        "profit_factor",
+        "total_trades",
+    ]
+    if any(pd.isna(result_row.get(key)) for key in required):
+        return np.nan
+
+    # 風險懲罰：回撤超過 25% 開始扣分
+    max_drawdown = float(result_row["max_drawdown"])
+    drawdown_penalty = max(0.0, abs(max_drawdown) - 0.25)
+
+    # 成本敏感度代理：交易次數越多，保守扣分
+    total_trades = float(result_row["total_trades"])
+    trade_penalty = total_trades / 1000.0
+
+    score = (
+        0.40 * float(result_row["sharpe_ratio"])
+        + 0.20 * float(result_row["sortino_ratio"])
+        + 0.20 * float(result_row["calmar_ratio"])
+        + 0.20 * float(result_row["profit_factor"])
+        - 0.80 * drawdown_penalty
+        - 0.25 * trade_penalty
+    )
+    return score
 
 
 def generate_parameter_grid(param_ranges: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -96,6 +133,7 @@ def run_grid_search(
                 "win_rate": metrics["win_rate"],
                 "profit_factor": metrics["profit_factor"],
             }
+            row["practical_score"] = calculate_practical_score(row)
             results.append(row)
             
         except Exception as e:
@@ -112,6 +150,7 @@ def run_grid_search(
                 "total_trades": None,
                 "win_rate": None,
                 "profit_factor": None,
+                "practical_score": None,
                 "error": str(e),
             })
     
@@ -176,10 +215,11 @@ def get_best_params(
         raise ValueError("沒有有效的結果")
     
     # 取得參數欄位
-    param_cols = [col for col in top.columns 
+    param_cols = [col for col in top.columns
                   if col not in ["total_return", "annualized_return", "max_drawdown",
                                  "sharpe_ratio", "sortino_ratio", "calmar_ratio",
-                                 "total_trades", "win_rate", "profit_factor", "error"]]
+                                 "total_trades", "win_rate", "profit_factor",
+                                 "practical_score", "error"]]
     
     best_params = {}
     for col in param_cols:

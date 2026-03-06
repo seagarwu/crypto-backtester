@@ -5,6 +5,7 @@
 """
 
 from .grid_search import (
+    calculate_practical_score,
     generate_parameter_grid,
     run_grid_search,
     select_top_k,
@@ -21,6 +22,7 @@ from .optuna_search import (
 )
 
 __all__ = [
+    "calculate_practical_score",
     "generate_parameter_grid",
     "run_grid_search",
     "select_top_k",
