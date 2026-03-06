@@ -196,20 +196,25 @@ def main():
     else:
         backtest_end = end_date
     
-    # 環境檢查
-    print("=" * 60)
-    print("🤖 Multi-Agent Trading System")
-    print("=" * 60)
-    print(f"模式: {args.mode}")
-    print(f"交易對: {symbols}")
-    print(f"週期: {intervals}")
-    print(f"數據範圍: {start_date.date()} ~ {end_date.date()}")
-    print(f"初始資金: ${args.capital:,.2f}")
-    
-    if args.backtest:
-        print(f"回測範圍: {backtest_start.date()} ~ {backtest_end.date()}")
-    
-    print("=" * 60)
+    # 解析後立即處理下載模式，跳過多餘顯示
+    if args.download or args.backtest:
+        # 下載/回測模式不需要交易系統資訊
+        pass
+    else:
+        # 環境檢查
+        print("=" * 60)
+        print("🤖 Multi-Agent Trading System")
+        print("=" * 60)
+        print(f"模式: {args.mode}")
+        print(f"交易對: {symbols}")
+        print(f"週期: {intervals}")
+        print(f"數據範圍: {start_date.date()} ~ {end_date.date()}")
+        print(f"初始資金: ${args.capital:,.2f}")
+        
+        if args.backtest:
+            print(f"回測範圍: {backtest_start.date()} ~ {backtest_end.date()}")
+        
+        print("=" * 60)
     
     # 檢查 API Key
     if args.mode == "live":

@@ -89,7 +89,7 @@ def download_with_progress(
     
     print(f"\n📊 {symbol} {interval}:")
     print(f"   時間範圍: {pd.to_datetime(start_time, unit='ms')} ~ {pd.to_datetime(end_time, unit='ms')}")
-    print(f   "估計需要: {estimated_batches} 批次")
+    print(f"   估計需要: {estimated_batches} 批次")
     print(f"   速率限制: {rate_limit} 次/分鐘")
     
     all_data = []
