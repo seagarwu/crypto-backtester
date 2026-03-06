@@ -274,6 +274,14 @@ def main():
                 for interval in intervals:
                     print(f"\n[{symbols.index(symbol)+1}/{len(symbols)}][{intervals.index(interval)+1}/{len(intervals)}] 下載: {symbol} {interval}")
                     
+                    # 檢查數據是否已存在
+                    output_file = f"data/{symbol}_{interval}.parquet"
+                    if Path(output_file).exists() and not args.force:
+                        existing = pd.read_parquet(output_file)
+                        print(f"   ⚠️ 數據已存在: {output_file} ({len(existing)} 筆)")
+                        print(f"   使用 --force 強制重新下載")
+                        continue
+                    
                     try:
                         df = download_with_progress(
                             symbol=symbol,
@@ -289,7 +297,6 @@ def main():
                             Path("data").mkdir(exist_ok=True)
                             
                             # 儲存
-                            output_file = f"data/{symbol}_{interval}.parquet"
                             df.to_parquet(output_file, index=False)
                             print(f"✅ 已存: {output_file} ({len(df)} 筆)")
                         else:
