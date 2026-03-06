@@ -299,11 +299,16 @@ def main():
                     # 如果數據存在，檢查日期範圍
                     if existing_df is not None and not existing_df.empty and not args.force:
                         existing_df['datetime'] = pd.to_datetime(existing_df['datetime'])
+                        
+                        # 確保時區一致性
+                        if existing_df['datetime'].dt.tz is None:
+                            existing_df['datetime'] = existing_df['datetime'].dt.tz_localize('UTC')
+                        
                         min_date = existing_df['datetime'].min()
                         max_date = existing_df['datetime'].max()
                         print(f"   ℹ️ 現有數據: {min_date.date()} ~ {max_date.date()} ({len(existing_df)} 筆)")
                         
-                        # 轉換請求的時間範圍
+                        # 轉換請求的時間範圍 (確保時區一致)
                         req_start = pd.to_datetime(start_ts, unit='ms', utc=True)
                         req_end = pd.to_datetime(end_ts, unit='ms', utc=True)
                         
