@@ -288,19 +288,37 @@ def main():
                     
                     # 檢查 parquet 或 csv
                     existing_file = None
+                    existing_df = None
                     if Path(output_file).exists():
                         existing_file = output_file
+                        existing_df = pd.read_parquet(existing_file)
                     elif Path(csv_file).exists():
                         existing_file = csv_file
+                        existing_df = pd.read_csv(existing_file, parse_dates=['datetime'])
                     
-                    if existing_file and not args.force:
-                        if existing_file.endswith('.csv'):
-                            existing = pd.read_csv(existing_file, parse_dates=['datetime'])
+                    # 如果數據存在，檢查日期範圍
+                    if existing_df is not None and not existing_df.empty and not args.force:
+                        existing_df['datetime'] = pd.to_datetime(existing_df['datetime'])
+                        min_date = existing_df['datetime'].min()
+                        max_date = existing_df['datetime'].max()
+                        print(f"   ℹ️ 現有數據: {min_date.date()} ~ {max_date.date()} ({len(existing_df)} 筆)")
+                        
+                        # 轉換請求的時間範圍
+                        req_start = pd.to_datetime(start_ts, unit='ms', utc=True)
+                        req_end = pd.to_datetime(end_ts, unit='ms', utc=True)
+                        
+                        # 如果現有數據已覆蓋請求範圍，則跳過
+                        if min_date <= req_start and max_date >= req_end:
+                            print(f"   ✅ 數據已完整，跳過下載")
+                            continue
                         else:
-                            existing = pd.read_parquet(existing_file)
-                        print(f"   ⚠️ 數據已存在: {existing_file} ({len(existing)} 筆)")
-                        print(f"   使用 --force 強制重新下載")
-                        continue
+                            # 計算需要補充的範圍
+                            new_start = req_start if req_start < min_date else req_start
+                            new_end = req_end if req_end > max_date else req_end
+                            print(f"   ⚠️ 需要補充: {new_start.date()} ~ {new_end.date()}")
+                            # 更新下載範圍
+                            start_ts = int(new_start.timestamp() * 1000)
+                            end_ts = int(new_end.timestamp() * 1000)
                     
                     try:
                         df = download_with_progress(
@@ -315,6 +333,14 @@ def main():
                         if df is not None and not df.empty:
                             # 確保 data 目錄存在
                             Path("data").mkdir(exist_ok=True)
+                            
+                            # 如果已有部分數據，合併
+                            if existing_df is not None and not existing_df.empty:
+                                print(f"   🔄 合併新舊數據...")
+                                df = pd.concat([existing_df, df], ignore_index=True)
+                                df = df.drop_duplicates(subset=['datetime'], keep='first')
+                                df = df.sort_values('datetime').reset_index(drop=True)
+                                print(f"   ✅ 合併後: {len(df)} 筆")
                             
                             # 儲存 (支援 parquet 或 csv)
                             try:
