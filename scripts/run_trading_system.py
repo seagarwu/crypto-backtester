@@ -13,6 +13,10 @@ import argparse
 import asyncio
 import os
 import sys
+from datetime import datetime, timedelta
+from pathlib import Path
+
+import pandas as pd
 
 # 確保可以匯入模組
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -28,9 +32,13 @@ def main():
   python run_trading_system.py --live          實盤交易
   python run_trading_system.py --once          只執行一次
   python run_trading_system.py --symbols BTCUSDT ETHUSDT
+  python run_trading_system.py --interval 1h,4h,1d
+  python run_trading_system.py --backtest --start 2024-01-01 --end 2024-12-31
+  python run_trading_system.py --download --years 10
         """
     )
     
+    # ===== 交易模式 =====
     parser.add_argument(
         "--mode", 
         choices=["paper", "live"], 
@@ -38,19 +46,20 @@ def main():
         help="交易模式 (default: paper)"
     )
     
+    # ===== 交易對和週期 =====
     parser.add_argument(
         "--symbols",
-        nargs="+",
-        default=["BTCUSDT"],
-        help="交易對 (default: BTCUSDT)"
+        default="BTCUSDT",
+        help="交易對 (逗號分隔): BTCUSDT,ETHUSDT (default: BTCUSDT)"
     )
     
     parser.add_argument(
         "--interval",
         default="1h",
-        help="K線週期 (default: 1h)"
+        help="K線週期 (逗號分隔): 1m,5m,15m,30m,1h,4h,1d,1w (default: 1h)"
     )
     
+    # ===== 資金 =====
     parser.add_argument(
         "--capital",
         type=float,
@@ -58,6 +67,7 @@ def main():
         help="初始資金 (default: 10000)"
     )
     
+    # ===== 執行選項 =====
     parser.add_argument(
         "--once",
         action="store_true",
@@ -70,17 +80,136 @@ def main():
         help="顯示詳細輸出"
     )
     
+    # ===== 數據下載選項 =====
+    parser.add_argument(
+        "--download",
+        action="store_true",
+        help="下載歷史數據後退出"
+    )
+    
+    parser.add_argument(
+        "--years",
+        type=int,
+        default=1,
+        help="下載多少年的數據 (default: 1)"
+    )
+    
+    parser.add_argument(
+        "--start",
+        type=str,
+        default=None,
+        help="開始日期: YYYY-MM-DD"
+    )
+    
+    parser.add_argument(
+        "--end",
+        type=str,
+        default=None,
+        help="結束日期: YYYY-MM-DD"
+    )
+    
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="強制重新下載覆蓋現有數據"
+    )
+    
+    parser.add_argument(
+        "--lookback-days",
+        type=int,
+        default=None,
+        help="往回抓取多少天 (default: years * 365)"
+    )
+    
+    # ===== 回測選項 =====
+    parser.add_argument(
+        "--backtest",
+        action="store_true",
+        help="執行回測模式"
+    )
+    
+    parser.add_argument(
+        "--backtest-start",
+        type=str,
+        default=None,
+        help="回測開始日期: YYYY-MM-DD"
+    )
+    
+    parser.add_argument(
+        "--backtest-end",
+        type=str,
+        default=None,
+        help="回測結束日期: YYYY-MM-DD"
+    )
+    
+    parser.add_argument(
+        "--require-full-data",
+        action="store_true",
+        help="回測範圍內缺數據時顯示錯誤"
+    )
+    
+    # ===== 數據下載相關參數 =====
+    parser.add_argument(
+        "--rate-limit",
+        type=int,
+        default=10,
+        help="下載時每分鐘請求次數 (default: 10)"
+    )
+    
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=500,
+        help="下載時每批 K線數量 (default: 500)"
+    )
+    
     args = parser.parse_args()
     
+    # 解析交易對和週期
+    symbols = [s.strip().upper() for s in args.symbols.split(",")]
+    intervals = [i.strip() for i in args.interval.split(",")]
+    
+    # 數據範圍
+    now = datetime.now()
+    
+    if args.end:
+        end_date = datetime.strptime(args.end, "%Y-%m-%d")
+    else:
+        end_date = now
+    
+    if args.start:
+        start_date = datetime.strptime(args.start, "%Y-%m-%d")
+    else:
+        if args.lookback_days:
+            start_date = end_date - timedelta(days=args.lookback_days)
+        else:
+            start_date = end_date - timedelta(days=args.years * 365)
+    
+    # 回測日期
+    if args.backtest_start:
+        backtest_start = datetime.strptime(args.backtest_start, "%Y-%m-%d")
+    else:
+        backtest_start = start_date
+    
+    if args.backtest_end:
+        backtest_end = datetime.strptime(args.backtest_end, "%Y-%m-%d")
+    else:
+        backtest_end = end_date
+    
     # 環境檢查
-    print("=" * 50)
-    print("Multi-Agent Trading System")
-    print("=" * 50)
+    print("=" * 60)
+    print("🤖 Multi-Agent Trading System")
+    print("=" * 60)
     print(f"模式: {args.mode}")
-    print(f"交易對: {args.symbols}")
-    print(f"週期: {args.interval}")
-    print(f"資金: ${args.capital:,.2f}")
-    print("=" * 50)
+    print(f"交易對: {symbols}")
+    print(f"週期: {intervals}")
+    print(f"數據範圍: {start_date.date()} ~ {end_date.date()}")
+    print(f"初始資金: ${args.capital:,.2f}")
+    
+    if args.backtest:
+        print(f"回測範圍: {backtest_start.date()} ~ {backtest_end.date()}")
+    
+    print("=" * 60)
     
     # 檢查 API Key
     if args.mode == "live":
@@ -98,11 +227,99 @@ def main():
     # 執行交易系統
     try:
         from agents import create_trading_system
+        from data.binance import VALID_INTERVALS
+        
+        # 驗證週期
+        for interval in intervals:
+            if interval not in VALID_INTERVALS:
+                print(f"❌ 不支援的週期: {interval}")
+                print(f"   支援: {VALID_INTERVALS}")
+                sys.exit(1)
+        
+        # ===== 數據下載模式 =====
+        if args.download:
+            print("\n📥 開始下載歷史數據...")
+            from scripts.download_data import download_with_progress
+            from data.binance import datetime_to_timestamp
+            
+            for symbol in symbols:
+                for interval in intervals:
+                    print(f"\n開始下載: {symbol} {interval}")
+                    
+                    start_ts = datetime_to_timestamp(start_date)
+                    end_ts = datetime_to_timestamp(end_date)
+                    
+                    df = download_with_progress(
+                        symbol=symbol,
+                        interval=interval,
+                        start_time=start_ts,
+                        end_time=end_ts,
+                        rate_limit=args.rate_limit,
+                        batch_size=args.batch_size,
+                    )
+                    
+                    if not df.empty:
+                        # 儲存
+                        output_file = f"data/{symbol}_{interval}.parquet"
+                        df.to_parquet(output_file, index=False)
+                        print(f"✅ 已存: {output_file} ({len(df)} 筆)")
+                    else:
+                        print(f"❌ 無法下載: {symbol} {interval}")
+            
+            print("\n✅ 下載完成!")
+            sys.exit(0)
+        
+        # ===== 回測模式 =====
+        if args.backtest:
+            print("\n📈 執行回測模式...")
+            
+            # 檢查數據是否存在
+            from pathlib import Path
+            from scripts.download_data import download_with_progress
+            from data.binance import datetime_to_timestamp
+            
+            for symbol in symbols:
+                for interval in intervals:
+                    data_file = Path(f"data/{symbol}_{interval}.parquet")
+                    
+                    if not data_file.exists():
+                        if args.require_full_data:
+                            print(f"❌ 錯誤: 缺少數據 {symbol} {interval}")
+                            print(f"   請先下載: python scripts/run_trading_system.py --download --symbols {symbol} --interval {interval} --years 1")
+                            sys.exit(1)
+                        else:
+                            print(f"⚠️ 警告: 缺少 {symbol} {interval}，正在下載...")
+                            start_ts = datetime_to_timestamp(start_date)
+                            end_ts = datetime_to_timestamp(end_date)
+                            df = download_with_progress(symbol, interval, start_ts, end_ts, args.rate_limit, args.batch_size)
+                            df.to_parquet(data_file, index=False)
+                    
+                    # 驗證數據範圍
+                    df = pd.read_parquet(data_file)
+                    df["datetime"] = pd.to_datetime(df["datetime"])
+                    
+                    min_date = df["datetime"].min()
+                    max_date = df["datetime"].max()
+                    
+                    if backtest_start < min_date or backtest_end > max_date:
+                        msg = f"⚠️ 數據範圍不足: {min_date} ~ {max_date}"
+                        if args.require_full_data:
+                            print(f"❌ {msg}")
+                            print(f"   回測需要: {backtest_start} ~ {backtest_end}")
+                            sys.exit(1)
+                        else:
+                            print(f"   {msg}")
+            
+            # TODO: 執行回測引擎
+            print("✅ 數據驗證完成，回測引擎即將上線!")
+            sys.exit(0)
+        
+        # ===== 即時交易模式 =====
         
         # 建立系統
         system = create_trading_system(
-            symbols=args.symbols,
-            intervals=[args.interval],
+            symbols=symbols,
+            intervals=intervals,
             initial_capital=args.capital,
             mode=args.mode,
         )
