@@ -174,6 +174,14 @@ def main():
     now = datetime.now(timezone.utc)
     now_ms = int(now.timestamp() * 1000)
     
+    # 防禦：如果 now_ms 小於合理值，嘗試用另一種方式獲取
+    if now_ms < 1700000000000:  # 2023-10-01
+        import time
+        now_ms = int(time.time() * 1000)
+        now = datetime.fromtimestamp(time.time(), tz=timezone.utc)
+    
+    print(f"   系統時間: {now} ({now_ms})")
+    
     if args.end:
         end_date = datetime.strptime(args.end, "%Y-%m-%d").replace(tzinfo=timezone.utc)
     else:
@@ -314,7 +322,6 @@ def main():
             print("\n📈 執行回測模式...")
             
             # 檢查數據是否存在
-            from pathlib import Path
             from scripts.download_data import download_with_progress
             from data.binance import datetime_to_timestamp
             
