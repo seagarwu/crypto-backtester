@@ -11,8 +11,9 @@
 
 - ✅ 多策略回測
 - ✅ 策略參數掃描 (Grid Search)
+- ✅ Optuna 貝葉斯優化
 - ✅ Walk-forward testing
-- ✅ 報表輸出
+- ✅ 報告系統 (視覺化 + HTML)
 - ✅ 與 Agent / Workflow 系統整合
 - ✅ 未來可接 LangGraph / Multi-agent 架構
 
@@ -31,10 +32,12 @@ crypto-backtester/
 ├── metrics/               # 績效指標
 │   └── performance.py     # 績效計算
 ├── reports/               # 報告輸出
-│   └── output.py          # 結果匯出
+│   ├── output.py          # 結果匯出
+│   └── generator.py      # 視覺化報告生成
 ├── experiments/           # 研究實驗模組
 │   ├── grid_search.py     # 參數網格掃描
-│   └── walk_forward.py    # Walk-forward 測試
+│   ├── walk_forward.py    # Walk-forward 測試
+│   └── optuna_search.py   # Optuna 貝葉斯優化
 ├── vss/                   # VSS 市場分析模組
 │   ├── types.py           # 類型定義
 │   ├── analyzer.py       # 市場分析器
@@ -233,8 +236,105 @@ summary = result["summary"]
 
 - `grid_search.py`: 參數網格掃描
 - `walk_forward.py`: Walk-forward 測試
+- `optuna_search.py`: Optuna 貝葉斯優化
 
-### VSS 市場分析模組 (vss/)
+## 🧠 Optuna 貝葉斯優化
+
+使用 TPE (Tree-structured Parzen Estimator) 演算法進行高效的參數優化。
+
+### 使用腳本
+
+```bash
+python scripts/run_optuna.py \
+    --data data/BTCUSDT_1h.csv \
+    --trials 100 \
+    --short-low 5 \
+    --short-high 50 \
+    --long-low 20 \
+    --long-high 200 \
+    --objective sharpe_ratio
+```
+
+### 使用 API
+
+```python
+from data import load_csv
+from strategies import MACrossoverStrategy
+from experiments import run_optuna_optimization
+
+data = load_csv("data/BTCUSDT_1h.csv")
+
+# 參數空間
+param_space = {
+    "short_window": {"low": 5, "high": 50, "type": "int"},
+    "long_window": {"low": 20, "high": 200, "type": "int"},
+}
+
+# 執行 Optuna 優化
+result = run_optuna_optimization(
+    data=data,
+    strategy_class=MACrossoverStrategy,
+    param_space=param_space,
+    objective="sharpe_ratio",
+    n_trials=100,
+)
+
+# 取得最佳參數
+best_params = result["best_params"]
+best_value = result["best_value"]
+```
+
+### 帶約束的優化
+
+```python
+# 約束：short_window < long_window
+def constraints(params):
+    return params["short_window"] < params["long_window"]
+
+result = run_optuna_optimization(
+    data=data,
+    strategy_class=MACrossoverStrategy,
+    param_space=param_space,
+    objective="sharpe_ratio",
+    n_trials=50,
+    constraints=constraints,
+)
+```
+
+## 📊 報告系統
+
+### 使用 API
+
+```python
+from reports import ReportGenerator, generate_optimization_report
+import pandas as pd
+
+# 建立報告生成器
+gen = ReportGenerator(output_dir="reports")
+
+# 繪製資金曲線
+gen.plot_equity_curve(equity_df, title="My Equity Curve")
+
+# 繪製回撤曲線
+gen.plot_drawdown(equity_df, title="My Drawdown")
+
+# 繪製參數優化熱力圖
+gen.plot_optimization_heatmap(
+    results_df,
+    param_x="short_window",
+    param_y="long_window",
+    metric="sharpe_ratio",
+)
+
+# 自動生成完整報告
+generate_optimization_report(
+    results_df=optimization_results,
+    output_dir="reports",
+    title="My Optimization Report",
+)
+```
+
+## VSS 市場分析模組 (vss/)
 
 市場狀態視覺化（VSS）分析，實現即時市場監控與人類對齊。
 
