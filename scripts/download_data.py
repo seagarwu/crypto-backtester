@@ -26,7 +26,6 @@ from data.binance import (
     parse_interval_to_ms,
     VALID_INTERVALS,
 )
-from core.data_manager import DataManager
 
 
 def parse_intervals(intervals_str: str) -> List[str]:

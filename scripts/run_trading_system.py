@@ -244,32 +244,49 @@ def main():
         # ===== 數據下載模式 =====
         if args.download:
             print("\n📥 開始下載歷史數據...")
-            from scripts.download_data import download_with_progress
-            from data.binance import datetime_to_timestamp
+            print(f"   交易對: {symbols}")
+            print(f"   週期: {intervals}")
+            print(f"   範圍: {start_date.date()} ~ {end_date.date()}")
+            print()
+            
+            try:
+                from scripts.download_data import download_with_progress
+                from data.binance import datetime_to_timestamp
+            except ImportError as e:
+                print(f"❌ 匯入錯誤: {e}")
+                sys.exit(1)
             
             for symbol in symbols:
                 for interval in intervals:
-                    print(f"\n開始下載: {symbol} {interval}")
+                    print(f"\n[{symbols.index(symbol)+1}/{len(symbols)}][{intervals.index(interval)+1}/{len(intervals)}] 下載: {symbol} {interval}")
                     
-                    start_ts = datetime_to_timestamp(start_date)
-                    end_ts = datetime_to_timestamp(end_date)
-                    
-                    df = download_with_progress(
-                        symbol=symbol,
-                        interval=interval,
-                        start_time=start_ts,
-                        end_time=end_ts,
-                        rate_limit=args.rate_limit,
-                        batch_size=args.batch_size,
-                    )
-                    
-                    if not df.empty:
-                        # 儲存
-                        output_file = f"data/{symbol}_{interval}.parquet"
-                        df.to_parquet(output_file, index=False)
-                        print(f"✅ 已存: {output_file} ({len(df)} 筆)")
-                    else:
-                        print(f"❌ 無法下載: {symbol} {interval}")
+                    try:
+                        start_ts = datetime_to_timestamp(start_date)
+                        end_ts = datetime_to_timestamp(end_date)
+                        
+                        df = download_with_progress(
+                            symbol=symbol,
+                            interval=interval,
+                            start_time=start_ts,
+                            end_time=end_ts,
+                            rate_limit=args.rate_limit,
+                            batch_size=args.batch_size,
+                        )
+                        
+                        if df is not None and not df.empty:
+                            # 確保 data 目錄存在
+                            Path("data").mkdir(exist_ok=True)
+                            
+                            # 儲存
+                            output_file = f"data/{symbol}_{interval}.parquet"
+                            df.to_parquet(output_file, index=False)
+                            print(f"✅ 已存: {output_file} ({len(df)} 筆)")
+                        else:
+                            print(f"⚠️ 無數據: {symbol} {interval}")
+                    except Exception as e:
+                        print(f"❌ 下載失敗: {e}")
+                        import traceback
+                        traceback.print_exc()
             
             print("\n✅ 下載完成!")
             sys.exit(0)
