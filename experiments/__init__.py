@@ -14,6 +14,11 @@ from .walk_forward import (
     create_folds,
     run_walk_forward,
 )
+from .optuna_search import (
+    suggest_params,
+    run_optuna_optimization,
+    run_optuna_with_walk_forward,
+)
 
 __all__ = [
     "generate_parameter_grid",
@@ -22,4 +27,7 @@ __all__ = [
     "get_best_params",
     "create_folds",
     "run_walk_forward",
+    "suggest_params",
+    "run_optuna_optimization",
+    "run_optuna_with_walk_forward",
 ]

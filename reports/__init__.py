@@ -12,6 +12,10 @@ from .output import (
     save_markdown_report,
     export_results,
 )
+from .generator import (
+    ReportGenerator,
+    generate_optimization_report,
+)
 
 __all__ = [
     "trades_to_dataframe",
@@ -20,4 +24,6 @@ __all__ = [
     "generate_markdown_report",
     "save_markdown_report",
     "export_results",
+    "ReportGenerator",
+    "generate_optimization_report",
 ]
