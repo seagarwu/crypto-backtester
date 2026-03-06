@@ -12,6 +12,7 @@ from optuna.samplers import TPESampler
 
 from backtest import BacktestEngine
 from metrics import calculate_metrics
+from experiments.grid_search import calculate_practical_score
 
 
 def suggest_params(trial: optuna.Trial, param_space: Dict[str, Any]) -> Dict[str, Any]:
@@ -86,6 +87,7 @@ def run_optuna_optimization(
     n_jobs: int = 1,
     show_progress: bool = True,
     constraints: Optional[Callable] = None,
+    max_drawdown_constraint: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
     執行 Optuna 貝葉斯優化
@@ -107,6 +109,7 @@ def run_optuna_optimization(
         n_jobs: 並行任務數
         show_progress: 是否顯示進度
         constraints: 約束函數 (params -> bool)
+        max_drawdown_constraint: 最大回撤約束 (如 -0.4 表示 -40%)
 
     Returns:
         包含最佳參數和結果的字典
@@ -116,9 +119,13 @@ def run_optuna_optimization(
         # 建議參數
         params = suggest_params(trial, param_space)
         
-        # 檢查約束
+        # 檢查參數約束
         if constraints and not constraints(params):
             raise optuna.exceptions.TrialPruned("Constraint not satisfied")
+        
+        # 檢查 short_window < long_window
+        if params.get("short_window", 0) >= params.get("long_window", 0):
+            raise optuna.exceptions.TrialPruned("short_window must be less than long_window")
         
         try:
             # 建立策略實例
@@ -138,10 +145,34 @@ def run_optuna_optimization(
             metrics = calculate_metrics(result)
             
             # 取得目標值
-            if objective in metrics:
+            if objective == "practical_score":
+                # 計算實盤導向評分
+                result_row = {
+                    "sharpe_ratio": metrics.get("sharpe_ratio"),
+                    "sortino_ratio": metrics.get("sortino_ratio"),
+                    "calmar_ratio": metrics.get("calmar_ratio"),
+                    "max_drawdown": metrics.get("max_drawdown"),
+                    "profit_factor": metrics.get("profit_factor"),
+                    "total_trades": metrics.get("total_trades"),
+                }
+                value = calculate_practical_score(result_row)
+                if value is None or pd.isna(value):
+                    raise optuna.exceptions.TrialPruned("Invalid practical_score")
+                # 檢查最大回撤約束
+                if max_drawdown_constraint is not None:
+                    mdd = metrics.get("max_drawdown", 0)
+                    if mdd is not None and mdd < max_drawdown_constraint:
+                        raise optuna.exceptions.TrialPruned(f"MDD {mdd:.2%} exceeds constraint {max_drawdown_constraint:.2%}")
+                return value
+            elif objective in metrics:
                 value = metrics[objective]
                 if value is None or pd.isna(value):
                     raise optuna.exceptions.TrialPruned("Invalid metric value")
+                # 檢查最大回撤約束
+                if max_drawdown_constraint is not None:
+                    mdd = metrics.get("max_drawdown", 0)
+                    if mdd is not None and mdd < max_drawdown_constraint:
+                        raise optuna.exceptions.TrialPruned(f"MDD {mdd:.2%} exceeds constraint {max_drawdown_constraint:.2%}")
                 return value
             else:
                 raise ValueError(f"Unknown objective: {objective}")
@@ -173,6 +204,14 @@ def run_optuna_optimization(
         n_jobs=n_jobs,
         show_progress_bar=show_progress,
     )
+    
+    # 檢查是否有有效的試驗
+    valid_trials = [t for t in study.trials if t.state == optuna.trial.TrialState.COMPLETE]
+    if not valid_trials:
+        raise ValueError(
+            "No valid trials completed. This may happen if the max_drawdown constraint is too strict. "
+            "Try relaxing the constraint or using a different objective."
+        )
     
     # 取得最佳參數
     best_params = study.best_params

@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from data import load_csv
 from strategies import MACrossoverStrategy
 from experiments import run_optuna_optimization
+from experiments.grid_search import calculate_practical_score
 
 
 def main():
@@ -36,11 +37,15 @@ def main():
     parser.add_argument("--trials", type=int, default=100, help="Number of Optuna trials")
     parser.add_argument("--timeout", type=int, help="Timeout in seconds")
     parser.add_argument("--objective", default="sharpe_ratio",
-                       choices=["sharpe_ratio", "total_return", "calmar_ratio", "sortino_ratio"],
+                       choices=["sharpe_ratio", "total_return", "calmar_ratio", "sortino_ratio", "practical_score"],
                        help="Optimization objective")
     parser.add_argument("--direction", default="maximize",
                        choices=["maximize", "minimize"],
                        help="Optimization direction")
+    
+    # 約束條件
+    parser.add_argument("--max-drawdown", type=float, default=-1.0,
+                       help="Max drawdown constraint (e.g., -0.4 for -40%%). Set to -1 to disable.")
     
     # 資金和手續費
     parser.add_argument("--capital", type=float, default=10000.0, help="Initial capital")
@@ -68,6 +73,10 @@ def main():
     print(f"  Long Window: {args.long_low} ~ {args.long_high}")
     print(f"  試驗次數: {args.trials}")
     print(f"  目標: {args.objective}")
+    if args.max_drawdown < 0:
+        print(f"  最大回撤限制: 無")
+    else:
+        print(f"  最大回撤限制: {args.max_drawdown*100:.1f}%")
     print(f"  初始資金: ${args.capital:,.2f}")
     print(f"  手續費: {args.commission * 100}%")
     
@@ -76,6 +85,17 @@ def main():
     data = load_csv(args.data)
     print(f"   資料筆數: {len(data)}")
     print(f"   日期範圍: {data['datetime'].min()} ~ {data['datetime'].max()}")
+    
+    # 建立約束函數
+    constraints = None
+    if args.max_drawdown < 0:
+        # 不啟用約束
+        pass
+    else:
+        def max_drawdown_constraint(params: Dict) -> bool:
+            """約束：short_window < long_window"""
+            return params.get("short_window", 0) < params.get("long_window", 0)
+        constraints = max_drawdown_constraint
     
     # 執行優化
     print(f"\n🚀 開始 Optuna 優化...")
@@ -90,6 +110,7 @@ def main():
         commission_rate=args.commission,
         direction=args.direction,
         show_progress=True,
+        max_drawdown_constraint=args.max_drawdown if args.max_drawdown < 0 else None,
     )
     
     # 顯示結果
