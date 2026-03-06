@@ -70,8 +70,8 @@ def download_with_progress(
     Args:
         symbol: 交易對
         interval: K線週期
-        start_time: 開始時間戳
-        end_time: 結束時間戳
+        start_time: 開始時間戳 (UTC, 毫秒)
+        end_time: 結束時間戳 (UTC, 毫秒)
         rate_limit: 每分鐘請求次數
         batch_size: 每批數據量
     
@@ -80,10 +80,25 @@ def download_with_progress(
     """
     from time import sleep
     
+    from datetime import datetime, timezone
+    
+    # 如果開始時間是大於現在，說明計算錯誤
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    if start_time > now_ms:
+        print(f"   ⚠️ 開始時間 {pd.to_datetime(start_time, unit='ms')} 是未來時間，調整為現在")
+        start_time = now_ms - (365 * 24 * 3600 * 1000)  # 最近 1 年
+    
+    if end_time > now_ms:
+        end_time = now_ms
+    
     interval_ms = parse_interval_to_ms(interval)
     
-    # 計算總共需要多少批
+    # 計算總共需要多少批 (每批 batch_size 根 K 線)
     total_ms = end_time - start_time
+    if total_ms <= 0:
+        print(f"   ⚠️ 無效的時間範圍")
+        return pd.DataFrame()
+    
     estimated_batches = max(1, total_ms // (interval_ms * batch_size))
     
     print(f"\n📊 {symbol} {interval}:")
@@ -96,26 +111,35 @@ def download_with_progress(
     batch_num = 0
     total_rows = 0
     request_count = 0
-    start_time_real = datetime.now()
+    start_time_real = datetime.now(timezone.utc)
     
     while current_start < end_time:
         batch_num += 1
         
-        # 計算這批的結束時間
-        request_end = min(current_start + interval_ms * batch_size, end_time)
+        # 如果這批時間已經是未來，就停止
+        if current_start >= now_ms:
+            print(f"   ⚠️ 已到達現在時間，下載完成")
+            break
         
         try:
-            # 下載這批數據
-            df = download_klines_range(
+            # 直接調用 Binance API
+            from data.binance import DataDownloader
+            downloader = DataDownloader()
+            
+            # 這批請求的結束時間
+            request_end = min(current_start + interval_ms * batch_size, end_time, now_ms)
+            
+            df = downloader.download_klines(
                 symbol=symbol,
                 interval=interval,
                 start_time=current_start,
-                end_time=request_end,
+                limit=min(batch_size, 1000),  # Binance 最多 1000
             )
             
             request_count += 1
             
-            if df.empty:
+            if df is None or df.empty:
+                print(f"   ⚠️ 批次 {batch_num}: 無更多數據")
                 break
             
             all_data.append(df)
@@ -123,17 +147,18 @@ def download_with_progress(
             
             # 進度計算
             progress = min(100, (current_start - start_time) / total_ms * 100)
-            elapsed = (datetime.now() - start_time_real).total_seconds()
-            eta = (elapsed / max(1, progress)) * (100 - progress) if progress > 0 else 0
+            elapsed = (datetime.now(timezone.utc) - start_time_real).total_seconds()
             
-            print(f"   批次 {batch_num}: +{len(df)} 筆 | 進度: {progress:.1f}% | 已用時: {format_duration(int(elapsed))} | 預估剩餘: {format_duration(int(eta))}")
+            print(f"   批次 {batch_num}: +{len(df)} 筆 | 進度: {progress:.1f}% | 已用時: {format_duration(int(elapsed))}")
             
-            # 取得下一批的開始時間
+            # 取得下一批的開始時間 (最後一根 K 線的時間 + 1 根)
             last_time = int(pd.Timestamp(df["datetime"].iloc[-1]).timestamp() * 1000)
             current_start = last_time + interval_ms
             
         except Exception as e:
             print(f"   ❌ 批次 {batch_num} 失敗: {e}")
+            import traceback
+            traceback.print_exc()
             sleep(5)  # 失敗後等待
             continue
         
@@ -149,7 +174,7 @@ def download_with_progress(
     combined = combined.drop_duplicates(subset=["datetime"], keep="first")
     combined = combined.sort_values("datetime").reset_index(drop=True)
     
-    elapsed = (datetime.now() - start_time_real).total_seconds()
+    elapsed = (datetime.now(timezone.utc) - start_time_real).total_seconds()
     print(f"   ✅ 完成: {len(combined)} 筆 | 總用時: {format_duration(int(elapsed))} | 平均速率: {request_count/elapsed*60:.1f} 次/分鐘")
     
     return combined

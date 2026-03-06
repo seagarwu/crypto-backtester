@@ -170,20 +170,34 @@ def main():
     intervals = [i.strip() for i in args.interval.split(",")]
     
     # 數據範圍
-    now = datetime.now()
+    from datetime import datetime, timezone, timedelta
+    now = datetime.now(timezone.utc)
+    now_ms = int(now.timestamp() * 1000)
     
     if args.end:
-        end_date = datetime.strptime(args.end, "%Y-%m-%d")
+        end_date = datetime.strptime(args.end, "%Y-%m-%d").replace(tzinfo=timezone.utc)
     else:
         end_date = now
     
     if args.start:
-        start_date = datetime.strptime(args.start, "%Y-%m-%d")
+        start_date = datetime.strptime(args.start, "%Y-%m-%d").replace(tzinfo=timezone.utc)
     else:
         if args.lookback_days:
             start_date = end_date - timedelta(days=args.lookback_days)
         else:
             start_date = end_date - timedelta(days=args.years * 365)
+    
+    # 確保結束時間不超過現在
+    if end_date.timestamp() * 1000 > now_ms:
+        end_date = now
+    
+    # 確保開始時間不超過結束時間
+    if start_date > end_date:
+        start_date = end_date - timedelta(days=365)
+    
+    # 轉換為毫秒時間戳
+    start_ts = int(start_date.timestamp() * 1000)
+    end_ts = int(end_date.timestamp() * 1000)
     
     # 回測日期
     if args.backtest_start:
@@ -261,9 +275,6 @@ def main():
                     print(f"\n[{symbols.index(symbol)+1}/{len(symbols)}][{intervals.index(interval)+1}/{len(intervals)}] 下載: {symbol} {interval}")
                     
                     try:
-                        start_ts = datetime_to_timestamp(start_date)
-                        end_ts = datetime_to_timestamp(end_date)
-                        
                         df = download_with_progress(
                             symbol=symbol,
                             interval=interval,
