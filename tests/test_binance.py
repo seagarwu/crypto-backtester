@@ -188,9 +188,8 @@ class TestParseIntervalToMs:
         with pytest.raises(UnsupportedIntervalError):
             parse_interval_to_ms("1x")
         
-        # 1M 也不支援
-        with pytest.raises(UnsupportedIntervalError):
-            parse_interval_to_ms("1M")
+        # 1M 現在已經支援 (1M = 月K)
+        assert parse_interval_to_ms("1M") == 2_592_000_000
 
 
 class TestDownloadKlinesRange:
