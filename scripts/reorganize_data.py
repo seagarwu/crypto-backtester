@@ -82,7 +82,7 @@ def reorganize_file(input_path: str, dry_run: bool = True) -> int:
     output_count = 0
     for ym in yearmonths:
         mask = df['yearmonth'] == ym
-        subset = df.drop(columns=['yearmonth'])
+        subset = df[mask].drop(columns=['yearmonth'])
         
         output_filename = f"{symbol}_{interval}_{ym}.csv"
         output_path = os.path.join(output_dir, output_filename)
