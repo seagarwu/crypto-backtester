@@ -278,29 +278,35 @@ def main():
                 print(f"❌ 匯入錯誤: {e}")
                 sys.exit(1)
             
+
             for symbol in symbols:
                 for interval in intervals:
                     print(f"\n[{symbols.index(symbol)+1}/{len(symbols)}][{intervals.index(interval)+1}/{len(intervals)}] 下載: {symbol} {interval}")
                     
-                    # 檢查數據是否已存在
-                    output_file = f"data/{symbol}_{interval}.parquet"
-                    csv_file = f"data/{symbol}_{interval}.csv"
+                    # 輸出目錄: data/{interval}/
+                    output_dir = f"data/{interval}"
+                    Path(output_dir).mkdir(exist_ok=True)
                     
-                    # 檢查 parquet 或 csv
-                    existing_file = None
+                    # 檢查現有月份檔案
+                    existing_files = list(Path(output_dir).glob(f"{symbol}_{interval}_*.csv"))
+                    
+                    # 合併所有月份檔案
                     existing_df = None
-                    if Path(output_file).exists():
-                        existing_file = output_file
-                        existing_df = pd.read_parquet(existing_file)
-                    elif Path(csv_file).exists():
-                        existing_file = csv_file
-                        existing_df = pd.read_csv(existing_file, parse_dates=['datetime'])
+                    if existing_files and not args.force:
+                        dfs = []
+                        for f in existing_files:
+                            df_month = pd.read_csv(f, parse_dates=['datetime'])
+                            dfs.append(df_month)
+                        if dfs:
+                            existing_df = pd.concat(dfs, ignore_index=True)
+                            existing_df = existing_df.drop_duplicates(subset=['datetime'], keep='first')
+                            existing_df = existing_df.sort_values('datetime').reset_index(drop=True)
                     
                     # 如果數據存在，檢查日期範圍
                     if existing_df is not None and not existing_df.empty and not args.force:
                         existing_df['datetime'] = pd.to_datetime(existing_df['datetime'])
                         
-                        # 確保時區是 tz-naive (統一時區處理)
+                        # 確保時區是 tz-naive
                         if existing_df['datetime'].dt.tz is not None:
                             existing_df['datetime'] = existing_df['datetime'].dt.tz_localize(None)
                         
@@ -326,17 +332,7 @@ def main():
                             end_ts = int(new_end.timestamp() * 1000)
                     
                     try:
-                        # 定義存檔回調函數
-                        def save_progress(temp_df):
-                            """定期存檔回調"""
-                            try:
-                                # 嘗試存 parquet
-                                temp_df.to_parquet(output_file, index=False)
-                            except Exception:
-                                # 如果沒有 pyarrow，使用 CSV
-                                csv_file = output_file.replace('.parquet', '.csv')
-                                temp_df.to_csv(csv_file, index=False)
-                        
+                        # 下載數據
                         df = download_with_progress(
                             symbol=symbol,
                             interval=interval,
@@ -344,7 +340,7 @@ def main():
                             end_time=end_ts,
                             rate_limit=args.rate_limit,
                             batch_size=args.batch_size,
-                            save_callback=save_progress,
+                            save_callback=None,  # 不需要定期存檔
                         )
                         
                         if df is not None and not df.empty:
@@ -353,28 +349,25 @@ def main():
                             if df['datetime'].dt.tz is not None:
                                 df['datetime'] = df['datetime'].dt.tz_localize(None)
                             
-                            # 確保 data 目錄存在
-                            Path("data").mkdir(exist_ok=True)
-                            
                             # 如果已有部分數據，合併
                             if existing_df is not None and not existing_df.empty:
                                 print(f"   🔄 合併新舊數據...")
                                 df = pd.concat([existing_df, df], ignore_index=True)
                                 df = df.drop_duplicates(subset=['datetime'], keep='first')
                                 df = df.sort_values('datetime').reset_index(drop=True)
-                                print(f"   ✅ 合併後: {len(df)} 筆")
                             
-                            # 儲存 (支援 parquet 或 csv)
-                            try:
-                                df.to_parquet(output_file, index=False)
-                            except Exception:
-                                # 如果沒有 pyarrow，使用 CSV
-                                csv_file = output_file.replace('.parquet', '.csv')
-                                df.to_csv(csv_file, index=False)
-                                output_file = csv_file
-                                print(f"   ⚠️ 已改用 CSV 格式儲存")
+                            # 按月拆分存檔
+                            df['yearmonth'] = df['datetime'].dt.strftime('%Y%m')
+                            yearmonths = df['yearmonth'].unique()
                             
-                            print(f"✅ 已存: {output_file} ({len(df)} 筆)")
+                            for ym in yearmonths:
+                                mask = df['yearmonth'] == ym
+                                df_month = df[mask].drop(columns=['yearmonth'])
+                                output_file = f"{output_dir}/{symbol}_{interval}_{ym}.csv"
+                                df_month.to_csv(output_file, index=False)
+                                print(f"   ✅ 已存: {output_file} ({len(df_month)} 筆)")
+                            
+                            print(f"✅ 下載完成: {len(yearmonths)} 個月")
                         else:
                             print(f"⚠️ 無數據: {symbol} {interval}")
                     except Exception as e:
