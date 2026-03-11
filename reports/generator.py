@@ -59,6 +59,15 @@ class ReportGenerator:
             print("⚠️ matplotlib 未安裝，跳過繪圖")
             return None
         
+        # Handle empty or invalid data
+        if equity_df is None or equity_df.empty:
+            print("⚠️ 無效的 equity 數據，跳過繪圖")
+            return None
+        
+        if 'datetime' not in equity_df.columns or 'equity' not in equity_df.columns:
+            print("⚠️ 缺少必要欄位，跳過繪圖")
+            return None
+        
         fig, ax = plt.subplots(figsize=(12, 6))
         
         ax.plot(equity_df['datetime'], equity_df['equity'], linewidth=1.5, label='Equity')
@@ -143,10 +152,10 @@ class ReportGenerator:
         filename: Optional[str] = None,
     ) -> Optional[str]:
         """
-        繪製交易点位圖
+        繪製交易点位圖（簡單版）
         
         Args:
-            trades_df: 交易記錄，包含 entry_time, exit_time, entry_price, exit_price, pnl
+            trades_df: 交易記錄
             price_df: 價格數據
             title: 圖表標題
             filename: 輸出檔名
@@ -186,6 +195,135 @@ class ReportGenerator:
         
         if filename is None:
             filename = f"trades_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.png"
+        
+        filepath = self.output_dir / filename
+        plt.savefig(filepath, dpi=150, bbox_inches='tight')
+        plt.close()
+        
+        return str(filepath)
+    
+    def plot_trades_with_indicators(
+        self,
+        trades_df: pd.DataFrame,
+        price_df: pd.DataFrame,
+        title: str = "Trades with Technical Indicators",
+        filename: Optional[str] = None,
+        ma_periods: List[int] = None,
+        bband_period: int = 20,
+        bband_std: float = 2.0,
+    ) -> Optional[str]:
+        """
+        繪製交易點位圖（含技術指標）
+        
+        Args:
+            trades_df: 交易記錄
+            price_df: 價格數據
+            title: 圖表標題
+            filename: 輸出檔名
+            ma_periods: MA 週期列表 (預設 [20, 50, 200])
+            bband_period: BBand 週期 (預設 20)
+            bband_std: BBand 標準差倍數 (預設 2.0)
+            
+        Returns:
+            輸出檔案路徑
+        """
+        if not MATPLOTLIB_AVAILABLE:
+            return None
+        
+        # 確保數據足夠
+        if len(price_df) < bband_period:
+            # 數據不足，只畫價格和買賣點
+            return self.plot_trades(trades_df, price_df, title, filename)
+        
+        # 預設 MA 週期
+        ma_periods = ma_periods or [20, 50, 200]
+        
+        # 複製數據避免修改原數據
+        df = price_df.copy()
+        
+        # 計算 MA
+        for period in ma_periods:
+            df[f'MA_{period}'] = df['close'].rolling(window=period).mean()
+        
+        # 計算 BBand
+        df['BB_middle'] = df['close'].rolling(window=bband_period).mean()
+        bb_std = df['close'].rolling(window=bband_period).std()
+        df['BB_upper'] = df['BB_middle'] + (bb_std * bband_std)
+        df['BB_lower'] = df['BB_middle'] - (bb_std * bband_std)
+        
+        # 創建圖表（主圖 + 成交量）
+        fig = plt.figure(figsize=(16, 10))
+        
+        # 主圖：價格 + MA + BBand
+        ax1 = plt.subplot2grid((3, 1), (0, 0), rowspan=2)
+        
+        # 繪製 BBand
+        ax1.fill_between(df['datetime'], df['BB_upper'], df['BB_lower'], 
+                        alpha=0.1, color='blue', label='Bollinger Bands')
+        ax1.plot(df['datetime'], df['BB_upper'], 
+                linewidth=0.5, color='blue', alpha=0.5, linestyle='--')
+        ax1.plot(df['datetime'], df['BB_lower'], 
+                linewidth=0.5, color='blue', alpha=0.5, linestyle='--')
+        
+        # 繪製 MA
+        colors = ['orange', 'green', 'red']
+        for i, period in enumerate(ma_periods):
+            if period <= df.index[-1] + 1:  # 確保 MA 週期在數據範圍內
+                ax1.plot(df['datetime'], df[f'MA_{period}'], 
+                        linewidth=1.5, color=colors[i % len(colors)], 
+                        label=f'MA {period}', alpha=0.8)
+        
+        # 繪製價格
+        ax1.plot(df['datetime'], df['close'], 
+                linewidth=1, color='black', alpha=0.7, label='Close')
+        
+        # 繪製買賣點
+        for _, trade in trades_df.iterrows():
+            # 判斷顏色和標記
+            if trade.get('direction', 'long') == 'long':
+                pnl_color = 'green' if trade.get('pnl', 0) >= 0 else 'red'
+                entry_marker = '^'  # 買入
+                exit_marker = 'v'   # 賣出
+            else:
+                pnl_color = 'red' if trade.get('pnl', 0) >= 0 else 'green'
+                entry_marker = 'v'  # 賣出
+                exit_marker = '^'   # 買入（空單）
+            
+            # 進場點
+            if 'entry_time' in trade and pd.notna(trade['entry_time']):
+                ax1.scatter(trade['entry_time'], trade['entry_price'],
+                           marker=entry_marker, s=150, color=pnl_color, 
+                           edgecolor='black', linewidth=0.5, zorder=10)
+            
+            # 出場點
+            if 'exit_time' in trade and pd.notna(trade['exit_time']):
+                ax1.scatter(trade['exit_time'], trade['exit_price'],
+                           marker='o', s=100, color=pnl_color, 
+                           edgecolor='black', linewidth=0.5, zorder=10,
+                           facecolors='none')  # 空心
+        
+        ax1.set_title(title, fontsize=14, fontweight='bold')
+        ax1.set_ylabel('Price ($)', fontsize=12)
+        ax1.legend(loc='upper left', fontsize=9)
+        ax1.grid(True, alpha=0.3)
+        ax1.set_xlim(df['datetime'].min(), df['datetime'].max())
+        
+        # 成交量圖
+        ax2 = plt.subplot2grid((3, 1), (2, 0), sharex=ax1)
+        
+        # 根據漲跌顯示顏色
+        colors = ['green' if df['close'].iloc[i] >= df['open'].iloc[i] else 'red' 
+                  for i in range(len(df))]
+        ax2.bar(df['datetime'], df['volume'], color=colors, alpha=0.5, width=0.8)
+        
+        ax2.set_ylabel('Volume', fontsize=12)
+        ax2.set_xlabel('Date', fontsize=12)
+        ax2.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        
+        if filename is None:
+            filename = f"trades_indicators_{pd.Timestamp.now().strftime('%Y%m%d_%H%M%S')}.png"
         
         filepath = self.output_dir / filename
         plt.savefig(filepath, dpi=150, bbox_inches='tight')
