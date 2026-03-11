@@ -113,7 +113,7 @@ class AgentRole(Enum):
 class AgentConfig:
     """Agent 配置"""
     role: AgentRole
-    model: str = "gemini-2.0-flash"  # Gemini model
+    model: str = "gemini-2.5-flash"  # Gemini model
     temperature: float = 0.7
     max_tokens: int = 2000
     system_prompt: str = ""
