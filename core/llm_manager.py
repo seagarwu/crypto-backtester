@@ -234,7 +234,7 @@ class LLMManager:
         """
         # 默認模型
         if model_name is None:
-            model_name = "minimax/minimax-m2.5"
+            model_name = "MiniMax-M2.5"  # 使用官方 API
         
         # 緩存 key
         cache_key = f"{model_name}_{temperature}_{max_tokens}"
@@ -246,8 +246,15 @@ class LLMManager:
         model_config = AVAILABLE_MODELS.get(model_name)
         
         if model_config is None:
-            # 未知的模型，使用默認配置
-            model_config = ModelConfig(name=model_name)
+            # 未知的模型，嘗試識別 provider
+            if "/" in model_name:
+                # OpenRouter 格式如 "minimax/xxx"
+                provider = ModelProvider.OPENROUTER
+            elif model_name.startswith("MiniMax"):
+                provider = ModelProvider.MINIMAX
+            else:
+                provider = ModelProvider.OPENAI
+            model_config = ModelConfig(name=model_name, provider=provider)
         
         # 覆蓋參數
         temperature = temperature or model_config.temperature
@@ -269,13 +276,13 @@ class LLMManager:
                 openai_api_key=api_key,
             )
         elif model_config.provider == ModelProvider.MINIMAX:
-            # MiniMax 官方 API - 使用 OpenAI 兼容格式
+            # MiniMax 官方 API
             llm = ChatOpenAI(
-                model=model_name,  # 如 "MiniMax-M2.5"
+                model=model_name,  # 如 "M2-her", "MiniMax-M2.5"
                 temperature=temperature,
                 max_tokens=max_tokens,
                 openai_api_key=api_key or os.environ.get("MINIMAX_API_KEY", ""),
-                base_url="https://api.minimax.io/openai/v1",
+                base_url="https://api.minimax.io/v1/text",
             )
         else:
             raise ValueError(f"Unknown provider: {model_config.provider}")
