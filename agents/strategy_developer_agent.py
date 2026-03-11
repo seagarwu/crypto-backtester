@@ -126,13 +126,12 @@ class StrategyDeveloperAgent:
     def _get_llm(self):
         """懒加载 LLM"""
         if self.llm is None:
-            config = AgentConfig(
-                role=AgentRole.STRATEGY_DEVELOPER,
-                model=self.model,
+            # 使用便捷函数，直接传递模型参数
+            self.llm = get_llm(
+                model_name=self.model,
                 temperature=self.temperature,
-                system_prompt=self.system_prompt,
+                max_tokens=2000,
             )
-            self.llm = get_llm(config)
         return self.llm
     
     def develop_strategy(
