@@ -26,7 +26,7 @@ class ModelProvider(Enum):
 @dataclass
 class ModelConfig:
     """模型配置"""
-    name: str  # 模型名稱 (如 "minimax/minimax-m2.1")
+    name: str  # 模型名稱 (如 "minimax/minimax-m2.5")
     provider: ModelProvider = ModelProvider.OPENROUTER
     temperature: float = 0.7
     max_tokens: int = 2000
@@ -40,8 +40,8 @@ class ModelConfig:
 
 AVAILABLE_MODELS: Dict[str, ModelConfig] = {
     # MiniMax 系列 - 性價比高
-    "minimax/minimax-m2.1": ModelConfig(
-        name="minimax/minimax-m2.1",
+    "minimax/minimax-m2.5": ModelConfig(
+        name="minimax/minimax-m2.5",
         provider=ModelProvider.OPENROUTER,
         temperature=0.7,
         description="MiniMax Chat - 性價比高",
@@ -141,7 +141,7 @@ AVAILABLE_MODELS: Dict[str, ModelConfig] = {
 
 TASK_MODEL_MAPPING = {
     # 市場分析 - 需要快速理解和數據處理
-    "market_analysis": ["minimax/minimax-m2.1", "openai/gpt-3.5-turbo"],
+    "market_analysis": ["minimax/minimax-m2.5", "openai/gpt-3.5-turbo"],
     
     # 風險評估 - 需要謹慎推理
     "risk_assessment": ["anthropic/claude-3-sonnet", "openai/gpt-4-turbo"],
@@ -153,13 +153,13 @@ TASK_MODEL_MAPPING = {
     "code_generation": ["openai/gpt-4-turbo", "anthropic/claude-3-opus"],
     
     # 報告生成 - 需要流暢寫作
-    "report_generation": ["minimax/minimax-m2.1", "openai/gpt-3.5-turbo"],
+    "report_generation": ["minimax/minimax-m2.5", "openai/gpt-3.5-turbo"],
     
     # 複雜推理 - 需要深度思考
     "complex_reasoning": ["openai/o1-preview", "anthropic/claude-3-opus"],
     
     # 日常對話 - 快速便宜
-    "general": ["minimax/minimax-m2.1", "openai/gpt-3.5-turbo"],
+    "general": ["minimax/minimax-m2.5", "openai/gpt-3.5-turbo"],
     
     # 數學/量化計算
     "mathematical": ["openai/o1-preview", "openai/o1-mini"],
@@ -212,7 +212,7 @@ class LLMManager:
         """
         # 默認模型
         if model_name is None:
-            model_name = "minimax/minimax-m2.1"
+            model_name = "minimax/minimax-m2.5"
         
         # 緩存 key
         cache_key = f"{model_name}_{temperature}_{max_tokens}"
@@ -273,7 +273,7 @@ class LLMManager:
             LLM 實例
         """
         # 獲取候選模型
-        candidates = TASK_MODEL_MAPPING.get(task_type, ["minimax/minimax-m2.1"])
+        candidates = TASK_MODEL_MAPPING.get(task_type, ["minimax/minimax-m2.5"])
         
         # 根據成本控制過濾
         if cost_control != "auto":
@@ -317,7 +317,7 @@ class LLMManager:
         Returns:
             推薦的模型名稱
         """
-        candidates = TASK_MODEL_MAPPING.get(task_type, ["minimax/minimax-m2.1"])
+        candidates = TASK_MODEL_MAPPING.get(task_type, ["minimax/minimax-m2.5"])
         
         if criteria == "fast":
             # 選擇最快的

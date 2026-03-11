@@ -37,7 +37,7 @@ class AgentRole(Enum):
 class AgentConfig:
     """Agent 配置"""
     role: AgentRole
-    model: str = "minimax/minimax-m2.1"
+    model: str = "minimax/minimax-m2.5"
     temperature: float = 0.7
     max_tokens: int = 2000
     system_prompt: str = ""
@@ -105,7 +105,7 @@ class StrategyEvaluatorAgent:
     
     def __init__(
         self,
-        model: str = "minimax/minimax-m2.1",
+        model: str = "minimax/minimax-m2.5",
         metrics: EvaluationMetrics = None,
     ):
         self.model = model
@@ -438,7 +438,7 @@ class StrategyEvaluatorAgent:
 
 # 便捷函數
 def create_strategy_evaluator(
-    model: str = "minimax/minimax-m2.1",
+    model: str = "minimax/minimax-m2.5",
     metrics: EvaluationMetrics = None,
 ) -> StrategyEvaluatorAgent:
     """建立策略評估 Agent"""
