@@ -101,6 +101,9 @@ class ConversationalStrategyDeveloper:
         
         # 標記是否正在執行
         self.is_executing = False
+        
+        # 確保有過討論才能執行
+        self._has_discussed = False  # 必須經過 LLM 回應一輪
     
     @property
     def llm(self):
@@ -185,10 +188,24 @@ class ConversationalStrategyDeveloper:
         """判斷是否應該執行"""
         user_input_lower = user_input.lower()
         
-        # 明確的確認關鍵詞
-        confirmation_keywords = ["好", "可以", "執行", "確認", "ok", "yes", "開始吧", "開始執行"]
-        if any(kw in user_input_lower for kw in confirmation_keywords):
-            return True
+        # 必須先經過一輪討論才能執行
+        if not self._has_discussed:
+            return False
+        
+        # 明確的確認關鍵詞 - 必須是獨立的確認意圖
+        # 只接受明確的確認話語，不接受包含"執行"但意圖不明確的輸入
+        confirmation_patterns = [
+            "好", "可以", "確認", "ok", "yes", 
+            "開始吧", "開始執行", "好阿", "好啊",
+            "就這樣做", "就這樣", "開始進行", "執行吧",
+        ]
+        
+        # 嚴格匹配：必須是完整的確認詞，而不是句子中剛好包含這個字
+        for pattern in confirmation_patterns:
+            # 檢查是否是用戶說的完整確認（前後有邊界）
+            import re
+            if re.search(rf'\b{re.escape(pattern)}\b', user_input_lower):
+                return True
         
         # LLM 建議執行
         if llm_response and llm_response.startswith("[EXECUTE]"):
@@ -524,6 +541,10 @@ class ConversationalStrategyDeveloper:
                 
                 # 先用 LLM 分析回應
                 llm_response = self._llm_respond(user_input)
+                
+                # 標記已經過一輪討論（只有 LLM 成功回應才算）
+                if llm_response:
+                    self._has_discussed = True
                 
                 # 檢查是否應該執行
                 if self._should_execute(user_input, llm_response):
