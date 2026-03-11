@@ -66,32 +66,32 @@ from .strategy_rd_workflow import StrategyRDWorkflow, RDConfig
 # 根據 Agent 類型，預設推薦的模型
 AGENT_DEFAULT_MODELS = {
     "market_monitor": {
-        "model": "minimax/minimax-m2.5",
+        "model": "MiniMax-M2.5",
         "task": "market_analysis",
         "reason": "快速理解市場數據，成本低",
     },
     "strategy": {
-        "model": "minimax/minimax-m2.5",
+        "model": "MiniMax-M2.5",
         "task": "strategy_development",
         "reason": "創意和技術能力",
     },
     "risk": {
-        "model": "minimax/minimax-m2.5",
+        "model": "MiniMax-M2.5",
         "task": "risk_assessment",
         "reason": "謹慎推理",
     },
     "backtester": {
-        "model": "minimax/minimax-m2.5",
+        "model": "MiniMax-M2.5",
         "task": "mathematical",
         "reason": "數據處理為主",
     },
     "engineer": {
-        "model": "minimax/minimax-m2.5",
+        "model": "MiniMax-M2.5",
         "task": "code_generation",
         "reason": "代碼生成",
     },
     "reporter": {
-        "model": "minimax/minimax-m2.5",
+        "model": "MiniMax-M2.5",
         "task": "report_generation",
         "reason": "流暢寫作，成本低",
     },
@@ -113,7 +113,7 @@ class AgentRole(Enum):
 class AgentConfig:
     """Agent 配置"""
     role: AgentRole
-    model: str = "minimax/minimax-m2.5"  # MiniMax model
+    model: str = "MiniMax-M2.5"  # MiniMax model
     temperature: float = 0.7
     max_tokens: int = 2000
     system_prompt: str = ""

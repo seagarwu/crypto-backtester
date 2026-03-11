@@ -21,12 +21,13 @@ class ModelProvider(Enum):
     """模型提供商"""
     OPENROUTER = "openrouter"
     OPENAI = "openai"
+    MINIMAX = "minimax"  # MiniMax 官方 API
 
 
 @dataclass
 class ModelConfig:
     """模型配置"""
-    name: str  # 模型名稱 (如 "minimax/minimax-m2.5")
+    name: str  # 模型名稱 (如 "MiniMax-M2.5")
     provider: ModelProvider = ModelProvider.OPENROUTER
     temperature: float = 0.7
     max_tokens: int = 2000
@@ -39,12 +40,33 @@ class ModelConfig:
 # ==================== 預設模型 ====================
 
 AVAILABLE_MODELS: Dict[str, ModelConfig] = {
-    # MiniMax 系列 - 性價比高
+    # MiniMax 系列 (官方 API)
+    "MiniMax-M2.5": ModelConfig(
+        name="MiniMax-M2.5",
+        provider=ModelProvider.MINIMAX,
+        temperature=0.7,
+        description="MiniMax M2.5 - 最新旗艦模型",
+        strengths=["中文理解", "強大推理", "高性價比"],
+        weaknesses=[],
+        cost_tier="low",
+    ),
+    
+    "MiniMax-M2": ModelConfig(
+        name="MiniMax-M2",
+        provider=ModelProvider.MINIMAX,
+        temperature=0.7,
+        description="MiniMax M2 - 高效模型",
+        strengths=["中文理解", "快速回應"],
+        weaknesses=[],
+        cost_tier="low",
+    ),
+    
+    # MiniMax 系列 (OpenRouter)
     "minimax/minimax-m2.5": ModelConfig(
         name="minimax/minimax-m2.5",
         provider=ModelProvider.OPENROUTER,
         temperature=0.7,
-        description="MiniMax Chat - 性價比高",
+        description="MiniMax Chat (OpenRouter) - 性價比高",
         strengths=["中文理解", "快速回應", "成本低"],
         weaknesses=["複雜推理"],
         cost_tier="low",
@@ -245,6 +267,15 @@ class LLMManager:
                 temperature=temperature,
                 max_tokens=max_tokens,
                 openai_api_key=api_key,
+            )
+        elif model_config.provider == ModelProvider.MINIMAX:
+            # MiniMax 官方 API - 使用 OpenAI 兼容格式
+            llm = ChatOpenAI(
+                model=model_name,  # 如 "MiniMax-M2.5"
+                temperature=temperature,
+                max_tokens=max_tokens,
+                openai_api_key=api_key or os.environ.get("MINIMAX_API_KEY", ""),
+                base_url="https://api.minimax.io/openai/v1",
             )
         else:
             raise ValueError(f"Unknown provider: {model_config.provider}")
