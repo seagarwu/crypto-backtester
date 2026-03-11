@@ -33,6 +33,7 @@ class BaseStrategy(ABC):
         """
         self.name = name or self.__class__.__name__
         self.data: Optional[pd.DataFrame] = None
+        self.required_indicators: list = []  # 子類別可以覆寫
 
     @abstractmethod
     def generate_signals(self, data: pd.DataFrame) -> pd.DataFrame:

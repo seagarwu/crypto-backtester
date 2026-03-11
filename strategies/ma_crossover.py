@@ -40,6 +40,9 @@ class MACrossoverStrategy(BaseStrategy):
         super().__init__(name="MA_Crossover")
         self.short_window = short_window
         self.long_window = long_window
+        
+        # 設定所需指標
+        self.required_indicators = [f"MA_{short_window}", f"MA_{long_window}"]
 
         # 驗證參數
         if short_window >= long_window:
