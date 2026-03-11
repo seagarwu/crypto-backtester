@@ -360,6 +360,23 @@ class ConversationalStrategyDeveloper:
                 risk_level="high",
                 timeframe=intent["interval"],
             )
+        elif strategy_type == "bollinger":
+            # 布林帶策略 - 根據用戶的盤整盤邏輯
+            spec = StrategySpec(
+                name=f"{intent['symbol']} BBand策略",
+                description=description,
+                indicators=["BBand", "MA"],
+                parameters={
+                    "bband_period": 20,
+                    "bband_std": 2.0,
+                    "ma_period": 50,
+                    "entry_threshold": 1.0,  # 觸及下軌進場
+                    "exit_threshold": 1.0,   # 觸及上軌出場
+                    "use_ma_confirm": False,
+                },
+                risk_level="medium",
+                timeframe=intent["interval"],
+            )
         else:
             # 默認 MA 策略
             spec = StrategySpec(
@@ -606,46 +623,59 @@ class ConversationalStrategyDeveloper:
             interval = intent.get("interval", "1h")
             symbol = intent.get("symbol", "BTCUSDT")
             
-            # 嘗試載入數據
+            # 嘗試載入數據 - 支援多個可能路徑
             project_root = Path(__file__).parent.parent
-            data_path = str(project_root / "data" / f"{symbol}_{interval}.csv")
             
-            if not os.path.exists(data_path):
-                # 嘗試新月格式
-                interval_dir = project_root / "data" / interval
-                if interval_dir.exists():
-                    files = sorted((interval_dir / f"{symbol}_{interval}" / "*.csv").glob(f"{symbol}_{interval}_*.csv"))
-                    if files:
-                        dfs = []
-                        for f in files:
-                            df = pd.read_csv(f, parse_dates=['datetime'])
-                            dfs.append(df)
-                        if dfs:
-                            price_df = pd.concat(dfs, ignore_index=True)
-                            price_df = price_df.drop_duplicates(subset=['datetime'], keep='first')
-                            price_df = price_df.sort_values('datetime').reset_index(drop=True)
-                        else:
-                            print(f"\n⚠️ 找不到數據文件")
-                            return
-                    else:
-                        print(f"\n⚠️ 找不到數據文件: {data_path}")
-                        return
+            # 搜索數據文件
+            possible_paths = [
+                project_root / "data" / f"{symbol}_{interval}.csv",
+                project_root / "data" / symbol / f"{symbol}_{interval}.csv",
+                project_root / ".." / "data" / f"{symbol}_{interval}.csv",
+            ]
+            
+            data_path = None
+            for path in possible_paths:
+                if path.exists():
+                    data_path = str(path)
+                    break
+            
+            # 如果沒找到，搜索所有 CSV 文件
+            if not data_path:
+                csv_files = list(project_root.glob(f"**/{symbol}_{interval}.csv"))
+                if csv_files:
+                    data_path = str(csv_files[0])
+            
+            if not data_path or not os.path.exists(data_path):
+                print(f"\n⚠️ 找不到數據文件!")
+                print(f"   嘗試的路徑:")
+                for p in possible_paths:
+                    print(f"   - {p}")
+                print(f"\n   請確認數據文件路徑，或先下載數據")
+                return
             
             print(f"   📂 使用數據: {data_path}")
             
             # 載入數據
             from data import load_csv
-            from strategies import MACrossoverStrategy
+            from strategies import BBandStrategy, MACrossoverStrategy
             price_df = load_csv(data_path)
+            
+            print(f"   📊 數據載入成功: {len(price_df)} 行")
+            
+            # 根據策略類型選擇策略
+            strategy_class = MACrossoverStrategy
+            if "BBand" in spec.indicators or "bbands" in str(spec).lower():
+                strategy_class = BBandStrategy
             
             # 執行回測 - 直接使用 engine
             from backtest.engine import BacktestEngine
             
             # 創建策略
-            strategy_class = MACrossoverStrategy
             strategy = strategy_class(**spec.parameters)
             
             # 生成信號
+            print(f"   ⚙️ 策略: {strategy_class.__name__}")
+            print(f"   📐 參數: {spec.parameters}")
             signals = strategy.generate_signals(price_df)
             
             # 執行回測
