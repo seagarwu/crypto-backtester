@@ -215,6 +215,118 @@ class ConversationalStrategyDeveloper:
         
         return spec
     
+    def analyze_strategy_requirements(self, message: str) -> Dict[str, Any]:
+        """分析用戶的策略需求，生成確認問題"""
+        intent = self.parse_user_intent(message)
+        
+        # 識別複雜需求
+        analysis = {
+            "has_multi_timeframe": any(t in message for t in ["30m", "1h", "4h", "1d", "1w", "多週期", "多周期"]),
+            "needs_optimization": any(w in message for w in ["優化", "優化", "grid", "optuna", "參數"]),
+            "market_condition": None,
+            "indicators_mentioned": [],
+            "clarification_questions": [],
+        }
+        
+        # 識別市場條件
+        if "盤整" in message or "區間" in message:
+            analysis["market_condition"] = "range"
+        elif "多頭" in message or "上漲" in message:
+            analysis["market_condition"] = "bull"
+        elif "空頭" in message or "下跌" in message:
+            analysis["market_condition"] = "bear"
+        
+        # 識別提到的指標
+        if "ma" in message.lower() or "均線" in message:
+            analysis["indicators_mentioned"].append("MA")
+        if "bb" in message.lower() or "布林" in message:
+            analysis["indicators_mentioned"].append("BBand")
+        if "rsi" in message:
+            analysis["indicators_mentioned"].append("RSI")
+        if "macd" in message:
+            analysis["indicators_mentioned"].append("MACD")
+        if "量" in message or "volume" in message.lower():
+            analysis["indicators_mentioned"].append("Volume")
+        
+        # 生成確認問題
+        questions = []
+        
+        if analysis["has_multi_timeframe"]:
+            questions.append("1. 你說的多週期策略，具體要用哪些週期？例如 30m 當主要週期，1h/4h 當確認？")
+        
+        if analysis["needs_optimization"]:
+            questions.append("2. 參數優化方面，你傾向用 Grid Search (網格搜索) 還是 Optuna (貝葉斯優化)？")
+        
+        if analysis["market_condition"] == "range":
+            questions.append("3. 盤整盤策略通常用 BBand 來抓區間，你希望價格碰到下軌買入、上軌賣出？還是有其他想法？")
+        
+        if analysis["indicators_mentioned"]:
+            indicators_str = "、".join(analysis["indicators_mentioned"])
+            questions.append(f"4. 你提到的指標是 {indicators_str}，有特定的參數偏好嗎？")
+        
+        # 通用問題
+        if not questions:
+            questions.append("1. 請問你希望這個策略的風格是短線、波段還是長線？")
+        
+        questions.append("2. 你的風險承受程度是高、中、還是低？")
+        
+        analysis["clarification_questions"] = questions
+        
+        # 初步策略建議
+        if analysis["market_condition"] == "range" and "BBand" in analysis["indicators_mentioned"]:
+            analysis["preliminary_idea"] = """
+📋 根據你的需求，我初步的想法是：
+
+【策略方向】
+- 市場環境：比特幣處於盤整/區間震盪
+- 核心指標：布林帶 (BBand) + 移動平均線 (MA)
+- 多週期確認：使用 30m 為交易週期，1h/4h 確認趨勢
+
+【具體做法】
+- 價格觸及 BBand 下軌時買入，上軌時賣出
+- 用 MA 過濾假突破（例如價格在 MA 之上才做多）
+- 多週期共振：30m 出現訊號時，確認 1h/4h 趨勢方向一致
+
+【參數優化】
+- BBand: period (10-30), std (1.5-2.5)
+- MA: 週期組合測試 (如 20/50, 30/60, 50/200)
+- 這部分可以用 Optuna 自動優化
+"""
+        
+        return analysis
+    
+    def discuss_strategy(self, message: str) -> str:
+        """討論策略，不直接執行"""
+        analysis = self.analyze_strategy_requirements(message)
+        
+        response = "\n" + "=" * 60
+        response += "\n🔍 我理解你的需求了！"
+        response += "\n" + "=" * 60
+        
+        response += f"""
+📌 辨識到的關鍵點：
+   • 多週期分析: {'是' if analysis['has_multi_timeframe'] else '否'}
+   • 需要參數優化: {'是' if analysis['needs_optimization'] else '否'}
+   • 市場環境: {analysis['market_condition'] or '未指定'}
+   • 提到的指標: {', '.join(analysis['indicators_mentioned']) or '無'}
+"""
+        
+        if analysis.get("preliminary_idea"):
+            response += analysis["preliminary_idea"]
+        
+        response += "\n" + "-" * 60
+        response += "\n❓ 在開始開發之前，請確認以下問題：\n"
+        
+        for q in analysis["clarification_questions"]:
+            response += f"\n{q}"
+        
+        response += """
+\n-" * 60
+請回复你的答案，或者直接說「可以，開始開發」，我就會著手進行！
+"""
+        
+        return response
+    
     def clarify_requirements(self, intent: Dict) -> str:
         """詢問用戶以澄清需求"""
         questions = []
@@ -266,97 +378,89 @@ class ConversationalStrategyDeveloper:
                 
                 self.add_message("user", user_input)
                 
-                # 解析意圖
-                intent = self.parse_user_intent(user_input)
-                
-                # 如果意圖不明確，詢問用戶
-                if not intent.get("strategy_type"):
-                    question = self.clarify_requirements(intent)
-                    print(f"\n🤖 {question}")
-                    self.add_message("assistant", question)
+                # 檢查是否確認開始開發
+                if any(kw in user_input.lower() for kw in ["開始", "開發", "確認", "ok", "yes", "好", "可以"]):
+                    # 用戶確認，開始執行
+                    if self.current_strategy is None:
+                        # 沒有策略，需要先分析
+                        intent = self.parse_user_intent(user_input)
+                        if not intent.get("strategy_type"):
+                            question = self.clarify_requirements(intent)
+                            print(f"\n🤖 {question}")
+                            continue
+                        spec = self.develop_strategy_from_intent(intent, user_input)
+                    else:
+                        spec = self.current_strategy
+                    
+                    # 執行開發流程
+                    self._execute_development(spec, user_input)
                     continue
                 
-                # 確認理解
-                symbol = intent["symbol"]
-                interval = intent["interval"]
-                style = intent.get("style", "未知")
+                # 先討論策略，不直接執行
+                discussion = self.discuss_strategy(user_input)
+                print(f"\n🤖 {discussion}")
+                self.add_message("assistant", discussion)
                 
-                print(f"""
-🤖 我理解了！你想要：
-   • 交易對: {symbol}
-   • 時間框架: {interval}
-   • 策略類型: {intent.get('strategy_type')}
-   • 交易風格: {style}
+            except KeyboardInterrupt:
+                print("\n\n👋 中斷對話，再見！")
+                break
+            except EOFError:
+                break
 
-   正在開發策略...
-""")
-                
-                # 開發策略
-                spec = self.develop_strategy_from_intent(intent, user_input)
-                self.current_strategy = spec
-                
-                print(f"   📝 策略: {spec.name}")
-                print(f"   📊 指標: {', '.join(spec.indicators)}")
-                print(f"   ⚙️  參數: {spec.parameters}")
-                
-                # 詢問是否繼續
-                print("""
-   是否繼續？
-   y) 確認，開始回測
-   n) 重新描述
-""")
-                
-                confirm = input("   > ").strip().lower()
-                
-                if confirm != "y":
-                    print("\n好的，請重新描述你的策略想法。")
-                    continue
-                
-                # 執行回測
-                print("\n   🔄 執行回測...")
-                
-                try:
-                    # 嘗試載入數據
-                    from data import load_csv
-                    
-                    data_path = f"data/{intent['symbol']}_{intent['interval']}.csv"
-                    
-                    # 嘗試不同路徑
-                    for path in [data_path, f"../{data_path}", f"./{data_path}"]:
-                        if os.path.exists(path):
-                            data_path = path
-                            break
-                    
-                    if not os.path.exists(data_path):
-                        print(f"""
-   ⚠️  找不到數據文件: {data_path}
-   
-   請先下載數據：
-   python scripts/run_trading_system.py --download --symbols {intent['symbol']} --interval {intent['interval']} --years 1
-""")
-                        continue
-                    
-                    print(f"   📂 使用數據: {data_path}")
-                    
-                    # 執行回測 - 使用 BacktestConfig
-                    config = BacktestConfig(
-                        symbol=intent["symbol"],
-                        interval=intent["interval"],
-                    )
-                    
-                    backtest_report = self.runner.run_backtest(
-                        strategy_name="ma_crossover",
-                        strategy_params=spec.parameters,
-                        config=config,
-                    )
-                    self.current_result = backtest_report
-                    
-                    # 評估
-                    print("   📈 評估策略...")
-                    evaluation = self.evaluator.evaluate(backtest_report)
-                    
-                    # 顯示結果
-                    print(f"""
+    def _execute_development(self, spec, user_input: str = ""):
+        """執行策略開發流程"""
+        try:
+            intent = self.parse_user_intent(user_input)
+            interval = intent.get("interval", "1h")
+            symbol = intent.get("symbol", "BTCUSDT")
+            
+            # 嘗試載入數據
+            project_root = Path(__file__).parent.parent
+            data_path = str(project_root / "data" / f"{symbol}_{interval}.csv")
+            
+            if not os.path.exists(data_path):
+                # 嘗試新月格式
+                interval_dir = project_root / "data" / interval
+                if interval_dir.exists():
+                    files = sorted((interval_dir / f"{symbol}_{interval}" / "*.csv").glob(f"{symbol}_{interval}_*.csv"))
+                    if files:
+                        dfs = []
+                        for f in files:
+                            df = pd.read_csv(f, parse_dates=['datetime'])
+                            dfs.append(df)
+                        if dfs:
+                            import pandas as pd
+                            price_df = pd.concat(dfs, ignore_index=True)
+                            price_df = price_df.drop_duplicates(subset=['datetime'], keep='first')
+                            price_df = price_df.sort_values('datetime').reset_index(drop=True)
+                        else:
+                            print(f"\n⚠️ 找不到數據文件")
+                            return
+                    else:
+                        print(f"\n⚠️ 找不到數據文件: {data_path}")
+                        return
+            
+            print(f"   📂 使用數據: {data_path}")
+            
+            # 執行回測 - 使用 BacktestConfig
+            config = BacktestConfig(
+                symbol=intent["symbol"],
+                interval=intent["interval"],
+            )
+            
+            backtest_report = self.runner.run_backtest(
+                strategy_name="ma_crossover",
+                strategy_params=spec.parameters,
+                config=config,
+            )
+            self.current_result = backtest_report
+            
+            # 評估
+            print("   📈 評估策略...")
+            evaluation = self.evaluator.evaluate(backtest_report)
+            
+            # 顯示結果
+            print(f"""
 ╔══════════════════════════════════════════════════════════╗
 ║                    📊 回測結果                           ║
 ╠══════════════════════════════════════════════════════════╣
@@ -369,28 +473,28 @@ class ConversationalStrategyDeveloper:
 ║  評估結果: {evaluation.result.name:<45}║
 ╚══════════════════════════════════════════════════════════╝
 """)
-                    
-                    # 詢問是否保存報告
-                    print("""
+            
+            # 詢問是否保存報告
+            print("""
    是否保存報告？
    y) 是，生成完整報告
    n) 否
 """)
-                    
-                    save_report = input("   > ").strip().lower()
-                    
-                    if save_report == "y":
-                        # 生成報告
-                        from data import load_csv
-                        price_df = load_csv(data_path)
-                        
-                        output = generate_backtest_report(
-                            result=backtest_report,
-                            price_df=price_df,
-                            title=spec.name,
-                        )
-                        
-                        print(f"""
+            
+            save_report = input("   > ").strip().lower()
+            
+            if save_report == "y":
+                # 生成報告
+                from data import load_csv
+                price_df = load_csv(data_path)
+                
+                output = generate_backtest_report(
+                    result=backtest_report,
+                    price_df=price_df,
+                    title=spec.name,
+                )
+                
+                print(f"""
    ✅ 報告已生成！
    📁 文件位置:
       • HTML報告: {output.get('html_report', 'N/A')}
@@ -398,31 +502,24 @@ class ConversationalStrategyDeveloper:
       • 資產曲線: {output.get('equity_curve', 'N/A')}
       • 回撤圖: {output.get('drawdown', 'N/A')}
 """)
-                    
-                    # 詢問是否繼續
-                    print("""
+            
+            # 詢問是否繼續
+            print("""
    是否繼續開發其他策略？
    y) 是
    n) 否
 """)
-                    
-                    continue_dev = input("   > ").strip().lower()
-                    
-                    if continue_dev != "y":
-                        print("\n👋 謝謝使用，再見！")
-                        break
-                
-                except Exception as e:
-                    print(f"\n   ❌ 執行出错: {e}")
-                    import traceback
-                    traceback.print_exc()
-                    continue
-                    
-            except KeyboardInterrupt:
-                print("\n\n👋 中斷對話，再見！")
-                break
-            except EOFError:
-                break
+            
+            continue_dev = input("   > ").strip().lower()
+            
+            if continue_dev != "y":
+                print("\n👋 謝謝使用，再見！")
+                return
+            
+        except Exception as e:
+            print(f"\n   ❌ 執行出错: {e}")
+            import traceback
+            traceback.print_exc()
 
 
 def main():
