@@ -61,6 +61,14 @@ class ConversationalStrategyDeveloper:
             "timestamp": datetime.now().isoformat()
         })
     
+    def _save_current_intent(self, message: str):
+        """保存當前用戶意圖"""
+        self._current_intent = self.parse_user_intent(message)
+    
+    def _get_last_intent(self) -> Dict[str, Any]:
+        """獲取最近保存的用戶意圖"""
+        return getattr(self, '_current_intent', None)
+    
     def print_welcome(self):
         """打印歡迎訊息"""
         print("""
@@ -383,16 +391,20 @@ class ConversationalStrategyDeveloper:
                 # 檢查是否確認開始開發
                 # 注意：只有當明確說「好」「可以」「確認」或完整回答問題時才執行
                 # 不要把「開發」「策略」等關鍵詞當作確認
-                if any(kw in user_input.lower() for kw in ["好", "可以", "確認", "ok", "yes", "執行", "開始吧"]):
+                is_confirmation = any(kw in user_input.lower() for kw in ["好", "可以", "確認", "ok", "yes", "執行", "開始吧"])
+                
+                if is_confirmation:
                     # 用戶確認，開始執行
                     if self.current_strategy is None:
-                        # 沒有策略，需要先分析
-                        intent = self.parse_user_intent(user_input)
-                        if not intent.get("strategy_type"):
-                            question = self.clarify_requirements(intent)
-                            print(f"\n🤖 {question}")
-                            continue
+                        # 從對話歷史中獲取之前的意圖
+                        intent = self._get_last_intent()
+                        if not intent:
+                            # 沒有歷史，需要重新分析
+                            intent = self.parse_user_intent(user_input)
+                        
+                        # 根據意圖生成策略規格
                         spec = self.develop_strategy_from_intent(intent, user_input)
+                        self.current_strategy = spec
                     else:
                         spec = self.current_strategy
                     
@@ -400,10 +412,14 @@ class ConversationalStrategyDeveloper:
                     self._execute_development(spec, user_input)
                     continue
                 
+                # 用戶回答問題，解析回答並更新狀態
                 # 先討論策略，不直接執行
                 discussion = self.discuss_strategy(user_input)
                 print(f"\n🤖 {discussion}")
                 self.add_message("assistant", discussion)
+                
+                # 保存當前意圖供確認時使用
+                self._save_current_intent(user_input)
                 
             except KeyboardInterrupt:
                 print("\n\n👋 中斷對話，再見！")
