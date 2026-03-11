@@ -169,7 +169,7 @@ def get_llm(config: AgentConfig):
             temperature=config.temperature,
             max_tokens=config.max_tokens,
             openai_api_key=os.environ.get("MINIMAX_API_KEY", ""),
-            base_url="https://api.minimax.io/v1/text",
+            base_url="https://api.minimax.io/v1",  # SDK 會自動添加 /chat/completions
         )
     else:
         # Default to OpenAI or OpenRouter

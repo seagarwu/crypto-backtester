@@ -282,7 +282,7 @@ class LLMManager:
                 temperature=temperature,
                 max_tokens=max_tokens,
                 openai_api_key=api_key or os.environ.get("MINIMAX_API_KEY", ""),
-                base_url="https://api.minimax.io/v1/text",
+                base_url="https://api.minimax.io/v1",  # SDK 會自動添加 /chat/completions
             )
         else:
             raise ValueError(f"Unknown provider: {model_config.provider}")
