@@ -324,7 +324,7 @@ class ConversationalStrategyDeveloper:
         
         response += """
 \n-" * 60
-請回复你的答案，或者直接說「可以，開始開發」，我就會著手進行！
+請回复你的答案，或者直接說「好」「可以」或「執行」，我就會著手進行！
 """
         
         return response
@@ -381,7 +381,9 @@ class ConversationalStrategyDeveloper:
                 self.add_message("user", user_input)
                 
                 # 檢查是否確認開始開發
-                if any(kw in user_input.lower() for kw in ["開始", "開發", "確認", "ok", "yes", "好", "可以"]):
+                # 注意：只有當明確說「好」「可以」「確認」或完整回答問題時才執行
+                # 不要把「開發」「策略」等關鍵詞當作確認
+                if any(kw in user_input.lower() for kw in ["好", "可以", "確認", "ok", "yes", "執行", "開始吧"]):
                     # 用戶確認，開始執行
                     if self.current_strategy is None:
                         # 沒有策略，需要先分析
