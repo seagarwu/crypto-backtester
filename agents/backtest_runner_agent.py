@@ -25,6 +25,7 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backtest.engine import BacktestEngine, BacktestResult
+from strategies.ma_crossover import MACrossoverStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -88,8 +89,12 @@ class BacktestRunnerAgent:
     
     def __init__(
         self,
-        data_dir: str = "data",
+        data_dir: str = None,
     ):
+        # 使用專案根目錄
+        if data_dir is None:
+            project_root = Path(__file__).parent.parent
+            data_dir = str(project_root / "data")
         self.data_dir = data_dir
         
         # 嘗試載入策略
@@ -98,7 +103,10 @@ class BacktestRunnerAgent:
     def _discover_strategies(self) -> Dict[str, Any]:
         """發現可用策略"""
         strategies = {}
-        strategies_dir = Path("strategies")
+        
+        # 使用專案根目錄
+        project_root = Path(__file__).parent.parent
+        strategies_dir = project_root / "strategies"
         
         if not strategies_dir.exists():
             return strategies
@@ -125,7 +133,7 @@ class BacktestRunnerAgent:
                         strategies[file.stem] = attr
                         
             except Exception as e:
-                logger.warning(f"無法載入策略 {file.stem}: {e}")
+                logger.debug(f"載入策略 {file.stem}: {e}")
         
         return strategies
     
@@ -223,7 +231,6 @@ class BacktestRunnerAgent:
                 strategy_class = self.strategies[strategy_name]
             else:
                 # 使用預設的 MA Crossover
-                from strategies.ma_crossover import MACrossoverStrategy
                 strategy_class = MACrossoverStrategy
         
         # 實例化策略
