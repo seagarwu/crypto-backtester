@@ -464,6 +464,64 @@ output = generate_backtest_report(
 # }
 ```
 
+### Agent 策略研發
+
+```python
+# 策略研發閉環 Workflow
+from agents import StrategyRDWorkflow, RDConfig
+
+# 初始化
+config = RDConfig(
+    symbol="BTCUSDT",
+    max_iterations=5,
+)
+workflow = StrategyRDWorkflow(config)
+
+# 執行研發閉環
+result = workflow.run(
+    market_analysis="比特幣處於多頭趨勢",
+    data=price_df,
+)
+
+# 審批策略
+if result.evaluation.score >= 70:
+    workflow.approve_strategy("策略通過")
+else:
+    workflow.reject_strategy("需要優化")
+```
+
+### 多 Agent 協作
+
+```python
+from agents import (
+    StrategyDeveloperAgent,
+    BacktestRunnerAgent,
+    StrategyEvaluatorAgent,
+    ReporterAgent,
+)
+
+# 1. 開發策略
+developer = StrategyDeveloperAgent()
+strategy_spec = developer.develop_strategy("比特幣一小時週期")
+
+# 2. 執行回測
+runner = BacktestRunnerAgent()
+backtest_report = runner.run_backtest(strategy_spec, price_df)
+
+# 3. 評估策略
+evaluator = StrategyEvaluatorAgent()
+evaluation = evaluator.evaluate(backtest_report)
+
+# 4. 生成報告
+reporter = ReporterAgent()
+report = reporter.generate_report(
+    market_analysis="...",
+    strategy_spec=strategy_spec,
+    backtest_report=backtest_report,
+    evaluation=evaluation,
+)
+```
+
 ## 🔮 未來擴充方向
 
 - 更多策略（RSI, MACD, Bollinger Bands）
