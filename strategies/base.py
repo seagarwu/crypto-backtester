@@ -33,7 +33,9 @@ class BaseStrategy(ABC):
         """
         self.name = name or self.__class__.__name__
         self.data: Optional[pd.DataFrame] = None
-        self.required_indicators: list = []  # 子類別可以覆寫
+        # 子類別需要在 __init__ 中設置 required_indicators
+        # 或者使用 @property 覆寫
+        # 不再自動設置，避免與 @property 衝突
 
     @abstractmethod
     def generate_signals(self, data: pd.DataFrame) -> pd.DataFrame:
