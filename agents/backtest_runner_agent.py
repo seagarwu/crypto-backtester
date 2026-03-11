@@ -242,7 +242,7 @@ class BacktestRunnerAgent:
         
         # 生成信號
         logger.info(f"生成信號...")
-        signals = strategy.calculate_signals(data, indicators)
+        signals = strategy.generate_signals(data)
         
         # 確保信號是 DataFrame
         if isinstance(signals, dict):
