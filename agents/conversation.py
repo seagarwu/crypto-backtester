@@ -708,9 +708,9 @@ class ConversationalStrategyDeveloper:
     def _execute_development(self, spec, user_input: str = ""):
         """執行策略開發流程"""
         try:
-            intent = self.parse_user_intent(user_input)
-            interval = intent.get("interval", "1h")
-            symbol = intent.get("symbol", "BTCUSDT")
+            # 使用 spec 中已有的信息，而不是重新解析
+            interval = spec.timeframe or "1h"
+            symbol = spec.name.split()[0] if spec.name else "BTCUSDT"  # 從名稱提取交易對
             
             # 嘗試載入數據 - 支援多個可能路徑
             project_root = Path(__file__).parent.parent
@@ -753,7 +753,7 @@ class ConversationalStrategyDeveloper:
             
             # 根據策略類型選擇策略
             strategy_class = MACrossoverStrategy
-            if "BBand" in spec.indicators or "bbands" in str(spec).lower():
+            if "BBand" in spec.indicators or "bbands" in str(spec.indicators).lower():
                 strategy_class = BBandStrategy
             
             # 執行回測 - 直接使用 engine
@@ -769,8 +769,8 @@ class ConversationalStrategyDeveloper:
             
             # 執行回測
             config = BacktestConfig(
-                symbol=intent.get("symbol", "BTCUSDT"),
-                interval=intent.get("interval", "30m"),
+                symbol=symbol,
+                interval=interval,
             )
             engine = BacktestEngine(
                 initial_capital=config.initial_capital,
