@@ -20,6 +20,7 @@ import pandas as pd
 # 確保可以匯入模組
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from agents import AgentRole, AgentConfig, get_llm, AGENT_PROMPTS
 from agents.strategy_developer_agent import StrategyDeveloperAgent, StrategySpec
 from agents.backtest_runner_agent import (
     BacktestRunnerAgent, 
@@ -39,10 +40,55 @@ from reports import generate_backtest_report
 logger = logging.getLogger(__name__)
 
 
+# 對話 Agent 的系統提示詞
+CONVERSATION_SYSTEM_PROMPT = """你是一個專業的量化策略開發助手，專門幫助用戶開發比特幣交易策略。
+
+你的職責：
+1. **理解用戶需求** - 仔細聆聽用戶描述的策略想法，包括：
+   - 市場環境（盤整、多頭、空頭）
+   - 使用的技術指標（MA、BBand、RSI、MACD等）
+   - 時間週期（30m、1h、4h、1d、1w等）
+   - 參數優化方式（Grid Search、Optuna）
+   - 風險偏好
+
+2. **積極詢問** - 在執行前確認細節：
+   - 週期組合方式
+   - 進出场具體邏輯
+   - 風險承受程度
+   - 期望的指標門檻
+
+3. **專業建議** - 根據你的專業知識提供建議：
+   - 策略可行性評估
+   - 參數範圍建議
+   - 潛在風險提醒
+   - 改進方向
+
+4. **清晰溝通** - 用戶話還沒說完不要執行，要先確認
+
+數據情況：
+- 可用歷史數據：10年比特幣歷史數據
+- 數據路徑：/media/nexcom/data/alan/crypto-backtester/data/
+- 可用週期：30m, 1h, 4h, 1d, 1w
+
+重要原則：
+- 用戶說「開發」某策略 = 描述需求，不是確認執行
+- 只有用戶明確說「好」「可以」「執行」才開始
+- 執行前必須先討論並確認所有細節
+- 如果用戶提到多週期，必須詢問具體組合方式
+- 如果用戶沒有提到優化方式，要詢問偏好"""
+
+
 class ConversationalStrategyDeveloper:
     """對話式策略開發助手"""
     
-    def __init__(self):
+    def __init__(self, model: str = "minimax/minimax-chat", temperature: float = 0.7):
+        # LLM 配置（懒加载）
+        self._llm = None
+        self._llm_config = {
+            "model": model,
+            "temperature": temperature,
+        }
+        
         self.developer = StrategyDeveloperAgent()
         self.evaluator = create_strategy_evaluator()
         self.runner = create_backtest_runner()
@@ -52,6 +98,27 @@ class ConversationalStrategyDeveloper:
         self.conversation_history: List[Dict[str, str]] = []
         self.current_strategy: Optional[StrategySpec] = None
         self.current_result: Optional["BacktestReport"] = None
+        
+        # 標記是否正在執行
+        self.is_executing = False
+    
+    @property
+    def llm(self):
+        """懒加载 LLM"""
+        if self._llm is None:
+            try:
+                config = AgentConfig(
+                    role=AgentRole.CONVERSATIONAL,
+                    model=self._llm_config["model"],
+                    temperature=self._llm_config["temperature"],
+                    max_tokens=2000,
+                    system_prompt=CONVERSATION_SYSTEM_PROMPT,
+                )
+                self._llm = get_llm(config)
+            except Exception as e:
+                logger.warning(f"LLM 初始化失敗: {e}")
+                return None
+        return self._llm
     
     def add_message(self, role: str, content: str):
         """添加對話記錄"""
@@ -68,6 +135,73 @@ class ConversationalStrategyDeveloper:
     def _get_last_intent(self) -> Dict[str, Any]:
         """獲取最近保存的用戶意圖"""
         return getattr(self, '_current_intent', None)
+    
+    def _build_llm_prompt(self, user_input: str) -> str:
+        """構建給 LLM 的 prompt，包含對話歷史"""
+        # 獲取對話歷史
+        history_text = ""
+        if self.conversation_history:
+            history_text = "\n\n=== 對話歷史 ===\n"
+            for msg in self.conversation_history[-6:]:  # 最多保留最近6條
+                role_emoji = "👤" if msg["role"] == "user" else "🤖"
+                history_text += f"{role_emoji} {msg['content'][:200]}\n"
+        
+        # 獲取當前策略狀態
+        strategy_status = ""
+        if self.current_strategy:
+            strategy_status = f"\n\n=== 當前策略 ===\n{self.current_strategy}"
+        
+        prompt = f"""=== 用戶最新輸入 ===
+{user_input}
+{history_text}
+{strategy_status}
+
+請根據以上對話歷史和用戶輸入，決定如何回覆：
+
+1. 如果用戶明確說「好」「可以」「執行」「開始」，表示確認，請回覆「[EXECUTE]」開頭
+2. 如果用戶在描述策略需求，請積極詢問細節（週期組合、進出场邏輯、風險偏好等）
+3. 如果用戶在回答問題，請確認理解並提出下一個問題或建議
+4. 不要直接執行，永遠先確認
+
+回覆格式：
+- 如果是要執行：請以「[EXECUTE]」開頭，後面簡要說明你要執行的內容
+- 如果是詢問問題：直接輸出問題
+- 如果是確認理解：簡短確認並繼續詢問"""
+        
+        return prompt
+    
+    def _llm_respond(self, user_input: str) -> str:
+        """使用 LLM 生成回應"""
+        try:
+            prompt = self._build_llm_prompt(user_input)
+            response = self.llm.invoke(prompt)
+            return response.content if hasattr(response, 'content') else str(response)
+        except Exception as e:
+            logger.warning(f"LLM 調用失敗: {e}")
+            # 如果 LLM 失敗，回退到規則方法
+            return None
+    
+    def _should_execute(self, user_input: str, llm_response: str = None) -> bool:
+        """判斷是否應該執行"""
+        user_input_lower = user_input.lower()
+        
+        # 明確的確認關鍵詞
+        confirmation_keywords = ["好", "可以", "執行", "確認", "ok", "yes", "開始吧", "開始執行"]
+        if any(kw in user_input_lower for kw in confirmation_keywords):
+            return True
+        
+        # LLM 建議執行
+        if llm_response and llm_response.startswith("[EXECUTE]"):
+            return True
+        
+        return False
+    
+    def _extract_strategy_from_llm(self, llm_response: str) -> str:
+        """從 LLM 回應中提取策略描述"""
+        if llm_response and llm_response.startswith("[EXECUTE]"):
+            # 移除 [EXECUTE] 標記，獲取執行內容描述
+            return llm_response[9:].strip()
+        return None
     
     def print_welcome(self):
         """打印歡迎訊息"""
@@ -388,12 +522,11 @@ class ConversationalStrategyDeveloper:
                 
                 self.add_message("user", user_input)
                 
-                # 檢查是否確認開始開發
-                # 注意：只有當明確說「好」「可以」「確認」或完整回答問題時才執行
-                # 不要把「開發」「策略」等關鍵詞當作確認
-                is_confirmation = any(kw in user_input.lower() for kw in ["好", "可以", "確認", "ok", "yes", "執行", "開始吧"])
+                # 先用 LLM 分析回應
+                llm_response = self._llm_respond(user_input)
                 
-                if is_confirmation:
+                # 檢查是否應該執行
+                if self._should_execute(user_input, llm_response):
                     # 用戶確認，開始執行
                     if self.current_strategy is None:
                         # 從對話歷史中獲取之前的意圖
@@ -412,11 +545,29 @@ class ConversationalStrategyDeveloper:
                     self._execute_development(spec, user_input)
                     continue
                 
-                # 用戶回答問題，解析回答並更新狀態
-                # 先討論策略，不直接執行
-                discussion = self.discuss_strategy(user_input)
-                print(f"\n🤖 {discussion}")
-                self.add_message("assistant", discussion)
+                # LLM 回應
+                if llm_response:
+                    # 檢查是否是執行標記
+                    execute_content = self._extract_strategy_from_llm(llm_response)
+                    if execute_content:
+                        # LLM 建議執行
+                        if self.current_strategy is None:
+                            intent = self._get_last_intent() or self.parse_user_intent(user_input)
+                            spec = self.develop_strategy_from_intent(intent, user_input)
+                            self.current_strategy = spec
+                        else:
+                            spec = self.current_strategy
+                        self._execute_development(spec, user_input)
+                        continue
+                    
+                    # 正常 LLM 回應
+                    print(f"\n🤖 {llm_response}")
+                    self.add_message("assistant", llm_response)
+                else:
+                    # LLM 失敗，回退到規則方法
+                    discussion = self.discuss_strategy(user_input)
+                    print(f"\n🤖 {discussion}")
+                    self.add_message("assistant", discussion)
                 
                 # 保存當前意圖供確認時使用
                 self._save_current_intent(user_input)
