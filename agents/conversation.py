@@ -616,6 +616,95 @@ class ConversationalStrategyDeveloper:
             except EOFError:
                 break
 
+    def _run_optimization(self, spec, price_df, data_path):
+        """執行 Optuna 參數優化"""
+        try:
+            from strategies import BBandStrategy, MACrossoverStrategy
+            from experiments.optuna_search import run_optuna_optimization
+            from backtest.engine import BacktestEngine
+            from metrics import calculate_metrics
+            
+            # 根據策略類型選擇
+            if "BBand" in spec.indicators:
+                strategy_class = BBandStrategy
+                param_space = {
+                    "bband_period": {"low": 10, "high": 60, "type": "int"},
+                    "bband_std": {"low": 1.5, "high": 3.0, "type": "float"},
+                    "ma_period": {"low": 20, "high": 200, "type": "int"},
+                    "entry_threshold": {"low": 0.0, "high": 0.5, "type": "float"},
+                    "exit_threshold": {"low": 0.8, "high": 1.5, "type": "float"},
+                }
+            else:
+                strategy_class = MACrossoverStrategy
+                param_space = {
+                    "short_window": {"low": 5, "high": 50, "type": "int"},
+                    "long_window": {"low": 20, "high": 200, "type": "int"},
+                }
+            
+            print(f"""
+╔══════════════════════════════════════════════════════════╗
+║              🧠 Optuna 參數優化                         ║
+╠══════════════════════════════════════════════════════════╣
+║  策略: {strategy_class.__name__:<40}║
+║  試驗次數: 50                                           ║
+║  優化目標: Sharpe Ratio                                 ║
+╚══════════════════════════════════════════════════════════╝
+""")
+            
+            # 執行優化
+            result = run_optuna_optimization(
+                data=price_df,
+                strategy_class=strategy_class,
+                param_space=param_space,
+                objective="sharpe_ratio",
+                n_trials=50,
+                direction="maximize",
+                show_progress=True,
+                max_drawdown_constraint=-0.5,  # 最大回撤約束 -50%
+            )
+            
+            if result.get("best_value"):
+                print(f"""
+╔══════════════════════════════════════════════════════════╗
+║              ✅ 優化完成                                 ║
+╠══════════════════════════════════════════════════════════╣
+║  最佳 Sharpe Ratio: {result['best_value']:.4f}                       ║
+║  最佳參數:                                               ║""")
+                
+                for k, v in result.get("best_params", {}).items():
+                    print(f"║    {k}: {v}")
+                
+                print("""╚══════════════════════════════════════════════════════════╝
+""")
+                
+                # 使用最佳參數重新回測
+                best_strategy = strategy_class(**result["best_params"])
+                signals = best_strategy.generate_signals(price_df)
+                
+                engine = BacktestEngine(
+                    initial_capital=10000,
+                    commission_rate=0.001,
+                )
+                backtest_result = engine.run(price_df, signals)
+                metrics = calculate_metrics(backtest_result)
+                
+                print(f"""
+╔══════════════════════════════════════════════════════════╗
+║            📊 優化後回測結果                            ║
+╠══════════════════════════════════════════════════════════╣
+║  Sharpe Ratio:  {metrics['sharpe_ratio']:.2f}                        ║
+║  Max Drawdown:  {metrics['max_drawdown']*100:.1f}%                        ║
+║  Win Rate:      {metrics['win_rate']*100:.1f}%                        ║
+║  Total Trades:  {backtest_result.total_trades}                          ║
+║  Profit Factor: {metrics['profit_factor']:.2f}                        ║
+╚══════════════════════════════════════════════════════════╝
+""")
+                
+        except Exception as e:
+            print(f"\n⚠️ 優化失敗: {e}")
+            import traceback
+            traceback.print_exc()
+    
     def _execute_development(self, spec, user_input: str = ""):
         """執行策略開發流程"""
         try:
@@ -742,6 +831,18 @@ class ConversationalStrategyDeveloper:
       • 資產曲線: {output.get('equity_curve', 'N/A')}
       • 回撤圖: {output.get('drawdown', 'N/A')}
 """)
+            
+            # 詢問是否進行參數優化
+            print("""
+   是否需要進行參數優化？
+   y) 是，使用 Optuna 自動優化參數
+   n) 否
+""")
+            
+            do_optimize = input("   > ").strip().lower()
+            
+            if do_optimize == "y":
+                self._run_optimization(spec, price_df, data_path)
             
             # 詢問是否繼續
             print("""
