@@ -148,12 +148,38 @@ class TradingState:
 
 def get_llm(config: AgentConfig):
     """建立 LLM 實例"""
-    return ChatOpenRouter(
-        model_name=config.model,
-        temperature=config.temperature,
-        max_tokens=config.max_tokens,
-        openrouter_api_key=os.environ.get("OPENROUTER_API_KEY", "")
-    )
+    from core.llm_manager import ModelProvider, ChatOpenAI
+    import os
+    
+    # 判斷 provider
+    model_name = config.model
+    if "/" in model_name:
+        # OpenRouter format like "minimax/xxx"
+        from langchain_openrouter import ChatOpenRouter
+        return ChatOpenRouter(
+            model_name=config.model,
+            temperature=config.temperature,
+            max_tokens=config.max_tokens,
+            openrouter_api_key=os.environ.get("OPENROUTER_API_KEY", "")
+        )
+    elif model_name.startswith("MiniMax"):
+        # MiniMax official API
+        return ChatOpenAI(
+            model=config.model,
+            temperature=config.temperature,
+            max_tokens=config.max_tokens,
+            openai_api_key=os.environ.get("MINIMAX_API_KEY", ""),
+            base_url="https://api.minimax.io/v1/text",
+        )
+    else:
+        # Default to OpenAI or OpenRouter
+        from langchain_openrouter import ChatOpenRouter
+        return ChatOpenRouter(
+            model_name=config.model,
+            temperature=config.temperature,
+            max_tokens=config.max_tokens,
+            openrouter_api_key=os.environ.get("OPENROUTER_API_KEY", "")
+        )
 
 
 # Agent Prompt 模板
