@@ -468,7 +468,7 @@ class ConversationalStrategyDeveloper:
                 commission_rate=config.commission_rate,
                 position_size=config.position_size,
             )
-            backtest_result = engine.run(signals, price_df)
+            backtest_result = engine.run(price_df, signals)
             self.current_result = backtest_result
             
             # 評估
