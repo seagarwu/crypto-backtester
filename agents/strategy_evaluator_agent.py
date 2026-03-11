@@ -139,18 +139,35 @@ class StrategyEvaluatorAgent:
     def evaluate(
         self,
         backtest_report,
+        metrics: Dict[str, Any] = None,
         target_metrics: Dict[str, float] = None,
     ) -> StrategyEvaluation:
         """
         評估策略
         
         Args:
-            backtest_report: BacktestReport 物件
+            backtest_report: BacktestResult 物件
+            metrics: 計算好的績效指標字典 (可選)
             target_metrics: 目標指標 (可選)
             
         Returns:
             StrategyEvaluation: 評估結果
         """
+        # 如果有傳入 metrics 字典，直接使用
+        if metrics is not None:
+            # 從 metrics 字典獲取指標
+            sharpe_ratio = metrics.get('sharpe_ratio', 0)
+            max_drawdown = metrics.get('max_drawdown', 0)
+            win_rate = metrics.get('win_rate', 0)
+            total_return = metrics.get('total_return', 0)
+            profit_factor = metrics.get('profit_factor', 0)
+        else:
+            # 從 backtest_report 獲取指標（向後兼容）
+            sharpe_ratio = getattr(backtest_report, 'sharpe_ratio', 0)
+            max_drawdown = getattr(backtest_report, 'max_drawdown', 0)
+            win_rate = getattr(backtest_report, 'win_rate', 0)
+            total_return = getattr(backtest_report, 'total_return', 0)
+            profit_factor = getattr(backtest_report, 'profit_factor', 0)
         metrics = self.metrics
         if target_metrics:
             metrics = EvaluationMetrics(
@@ -162,11 +179,11 @@ class StrategyEvaluatorAgent:
             )
         
         # 檢查各項指標
-        sharpe_passed = backtest_report.sharpe_ratio >= metrics.min_sharpe
-        drawdown_passed = backtest_report.max_drawdown <= metrics.max_drawdown
-        win_rate_passed = backtest_report.win_rate >= metrics.min_win_rate
+        sharpe_passed = sharpe_ratio >= metrics.min_sharpe
+        drawdown_passed = max_drawdown <= metrics.max_drawdown
+        win_rate_passed = win_rate >= metrics.min_win_rate
         trades_passed = backtest_report.total_trades >= metrics.min_trades
-        return_passed = backtest_report.total_return >= metrics.min_total_return
+        return_passed = total_return >= metrics.min_total_return
         
         # 計算分數
         score = self._calculate_score(
@@ -176,6 +193,9 @@ class StrategyEvaluatorAgent:
             win_rate_passed,
             trades_passed,
             return_passed,
+            sharpe_ratio=sharpe_ratio,
+            max_drawdown=max_drawdown,
+            win_rate=win_rate,
         )
         
         # 決定結果
@@ -194,6 +214,11 @@ class StrategyEvaluatorAgent:
             win_rate_passed,
             trades_passed,
             return_passed,
+            sharpe_ratio=sharpe_ratio,
+            max_drawdown=max_drawdown,
+            win_rate=win_rate,
+            total_return=total_return,
+            profit_factor=profit_factor,
         )
         
         summary = self._generate_summary(result, score, backtest_report)
@@ -220,27 +245,38 @@ class StrategyEvaluatorAgent:
         win_rate_passed: bool,
         trades_passed: bool,
         return_passed: bool,
+        sharpe_ratio: float = None,
+        max_drawdown: float = None,
+        win_rate: float = None,
     ) -> float:
         """計算綜合分數"""
+        # 如果有傳入，直接使用；否則從 report 獲取
+        if sharpe_ratio is None:
+            sharpe_ratio = getattr(report, 'sharpe_ratio', 0)
+        if max_drawdown is None:
+            max_drawdown = getattr(report, 'max_drawdown', 0)
+        if win_rate is None:
+            win_rate = getattr(report, 'win_rate', 0)
+        
         score = 0
         
         # Sharpe Ratio (25分)
         if sharpe_passed:
             score += 25
         else:
-            score += max(0, 25 - (self.metrics.min_sharpe - report.sharpe_ratio) * 25)
+            score += max(0, 25 - (self.metrics.min_sharpe - sharpe_ratio) * 25)
         
         # Drawdown (25分)
         if drawdown_passed:
             score += 25
         else:
-            score += max(0, 25 - (report.max_drawdown - self.metrics.max_drawdown) * 0.5)
+            score += max(0, 25 - (max_drawdown - self.metrics.max_drawdown) * 0.5)
         
         # Win Rate (20分)
         if win_rate_passed:
             score += 20
         else:
-            score += max(0, 20 - (self.metrics.min_win_rate - report.win_rate) * 0.5)
+            score += max(0, 20 - (self.metrics.min_win_rate - win_rate) * 0.5)
         
         # 交易次數 (10分)
         if trades_passed:
@@ -265,50 +301,69 @@ class StrategyEvaluatorAgent:
         win_rate_passed: bool,
         trades_passed: bool,
         return_passed: bool,
+        sharpe_ratio: float = None,
+        max_drawdown: float = None,
+        win_rate: float = None,
+        total_return: float = None,
+        profit_factor: float = None,
     ) -> tuple:
         """生成回饋意見"""
+        # 如果有傳入，直接使用；否則從 report 獲取
+        if sharpe_ratio is None:
+            sharpe_ratio = getattr(report, 'sharpe_ratio', 0)
+        if max_drawdown is None:
+            max_drawdown = getattr(report, 'max_drawdown', 0)
+        if win_rate is None:
+            win_rate = getattr(report, 'win_rate', 0)
+        if total_return is None:
+            total_return = getattr(report, 'total_return', 0)
+        if profit_factor is None:
+            profit_factor = getattr(report, 'profit_factor', 0)
+        
         strengths = []
         weaknesses = []
         recommendations = []
         
         # 優勢
         if sharpe_passed:
-            strengths.append(f"Sharpe Ratio 表現良好 ({report.sharpe_ratio:.2f})")
+            strengths.append(f"Sharpe Ratio 表現良好 ({sharpe_ratio:.2f})")
         if drawdown_passed:
-            strengths.append(f"最大回撤可控 ({report.max_drawdown:.1f}%)")
+            strengths.append(f"最大回撤可控 ({max_drawdown*100:.1f}%)")
         if win_rate_passed:
-            strengths.append(f"勝率達標 ({report.win_rate:.1f}%)")
+            strengths.append(f"勝率達標 ({win_rate*100:.1f}%)")
         if return_passed:
-            strengths.append(f"總收益為正 ({report.total_return:.1f}%)")
+            strengths.append(f"總收益為正 ({total_return*100:.1f}%)")
         
         # 劣勢
         if not sharpe_passed:
-            weaknesses.append(f"Sharpe Ratio 低 ({report.sharpe_ratio:.2f} < {self.metrics.min_sharpe})")
+            weaknesses.append(f"Sharpe Ratio 低 ({sharpe_ratio:.2f} < {self.metrics.min_sharpe})")
             recommendations.append(f"提高 Sharpe Ratio：優化進出场時機，或添加濾網條件")
         
         if not drawdown_passed:
-            weaknesses.append(f"最大回撤過大 ({report.max_drawdown:.1f}% > {self.metrics.max_drawdown}%)")
+            weaknesses.append(f"最大回撤過大 ({max_drawdown*100:.1f}% > {self.metrics.max_drawdown}%)")
             recommendations.append(f"降低回撤：減少倉位大小，或添加止損機制")
         
         if not win_rate_passed:
-            weaknesses.append(f"勝率偏低 ({report.win_rate:.1f}% < {self.metrics.min_win_rate}%)")
+            weaknesses.append(f"勝率偏低 ({win_rate*100:.1f}% < {self.metrics.min_win_rate*100:.1f}%)")
             recommendations.append(f"提高勝率：優化進場信號，或調整止損止盈比例")
         
         if not trades_passed:
             weaknesses.append(f"交易次數不足 ({report.total_trades} < {self.metrics.min_trades})")
             recommendations.append(f"增加交易機會：放寬進場條件，或優化參數")
         
-        if not return_passed and report.total_return < 0:
-            weaknesses.append(f"總收益為負 ({report.total_return:.1f}%)")
+        if not return_passed and total_return < 0:
+            weaknesses.append(f"總收益為負 ({total_return*100:.1f}%)")
             recommendations.append(f"檢視策略邏輯：可能需要完全重新設計")
         
         # 通用建議
-        if report.profit_factor > 0 and report.avg_loss != 0:
-            if report.profit_factor < 1.5:
-                recommendations.append(f"Profit Factor 較低 ({report.profit_factor:.2f})，建議調整盈虧比")
+        if profit_factor > 0:
+            avg_loss = getattr(report, 'avg_loss', 0)
+            if avg_loss != 0 and profit_factor < 1.5:
+                recommendations.append(f"Profit Factor 較低 ({profit_factor:.2f})，建議調整盈虧比")
         
-        if report.volatility > self.metrics.max_volatility:
-            recommendations.append(f"波動率過高 ({report.volatility:.1f}%)，考慮添加波動率濾網")
+        volatility = getattr(report, 'volatility', 0)
+        if volatility > self.metrics.max_volatility:
+            recommendations.append(f"波動率過高 ({volatility:.1f}%)，考慮添加波動率濾網")
         
         return strengths, weaknesses, recommendations
     

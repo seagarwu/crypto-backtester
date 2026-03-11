@@ -471,20 +471,24 @@ class ConversationalStrategyDeveloper:
             backtest_result = engine.run(price_df, signals)
             self.current_result = backtest_result
             
+            # 計算績效指標
+            from metrics import calculate_metrics
+            metrics = calculate_metrics(backtest_result)
+            
             # 評估
             print("   📈 評估策略...")
-            evaluation = self.evaluator.evaluate(backtest_result)
+            evaluation = self.evaluator.evaluate(backtest_result, metrics)
             
             # 顯示結果
             print(f"""
 ╔══════════════════════════════════════════════════════════╗
 ║                    📊 回測結果                           ║
 ╠══════════════════════════════════════════════════════════╣
-║  Sharpe Ratio:  {backtest_result.sharpe_ratio:.2f}                        ║
-║  Max Drawdown:  {backtest_result.max_drawdown:.1f}%                        ║
-║  Win Rate:      {backtest_result.win_rate:.1f}%                        ║
+║  Sharpe Ratio:  {metrics['sharpe_ratio']:.2f}                        ║
+║  Max Drawdown:  {metrics['max_drawdown']*100:.1f}%                        ║
+║  Win Rate:      {metrics['win_rate']*100:.1f}%                        ║
 ║  Total Trades:  {backtest_result.total_trades}                          ║
-║  Profit Factor: {backtest_result.profit_factor:.2f}                        ║
+║  Profit Factor: {metrics['profit_factor']:.2f}                        ║
 ╠══════════════════════════════════════════════════════════╣
 ║  評估結果: {evaluation.result.name:<45}║
 ╚══════════════════════════════════════════════════════════╝
