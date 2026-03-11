@@ -358,8 +358,28 @@ generate_optimization_report(
 ## 🧪 測試
 
 ```bash
+# 執行所有測試
 python -m pytest tests/ -v
+
+# 執行特定模組測試
+python -m pytest tests/test_backtest.py -v
+python -m pytest tests/test_reports.py -v
+python -m pytest tests/test_strategy_rd_workflow.py -v
 ```
+
+### 測試覆蓋
+
+| 模組 | 測試檔案 | 測試數 |
+|------|---------|--------|
+| 回測引擎 | `test_backtest.py` | 8 |
+| 報告生成 | `test_reports.py` | 12 |
+| 參數優化 | `test_grid_search.py`, `test_optuna.py` | 15 |
+| Walk-Forward | `test_walk_forward.py` | 4 |
+| Agent | `test_strategy_*.py`, `test_*.py` | 50+ |
+| VSS 模組 | `test_vss_*.py` | 40+ |
+| Alignment | `test_alignment_*.py` | 30+ |
+
+**結果**: 296 passed, 3 skipped
 
 ## 📝 設計取捨說明
 
