@@ -6,7 +6,7 @@
 
 import os
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Union
 import pandas as pd
 import numpy as np
 
@@ -18,6 +18,13 @@ try:
     MATPLOTLIB_AVAILABLE = True
 except ImportError:
     MATPLOTLIB_AVAILABLE = False
+
+# 導入 backtest 模組
+try:
+    from backtest.engine import BacktestResult, Trade
+    BACKTEST_AVAILABLE = True
+except ImportError:
+    BACKTEST_AVAILABLE = False
 
 
 class ReportGenerator:
@@ -638,6 +645,114 @@ class ReportGenerator:
             f.write(html)
         
         return str(filepath)
+    
+    def generate_backtest_report(
+        self,
+        result: "BacktestResult",
+        price_df: pd.DataFrame,
+        title: str = "Backtest Report",
+        output_filename: Optional[str] = None,
+        ma_periods: List[int] = None,
+    ) -> Dict[str, str]:
+        """
+        生成完整的回測報告（含買賣點位圖）
+        
+        Args:
+            result: BacktestResult 物件
+            price_df: 價格數據
+            title: 報告標題
+            output_filename: 輸出檔名
+            ma_periods: MA 週期列表
+            
+        Returns:
+            生成的檔案路徑字典
+        """
+        if not MATPLOTLIB_AVAILABLE:
+            return {"error": "matplotlib not available"}
+        
+        output_files = {}
+        
+        # 1. 生成 equity curve 圖
+        if result.equity_curve is not None and len(result.equity_curve) > 0:
+            equity_path = self.plot_equity_curve(result.equity_curve, title)
+            if equity_path:
+                output_files["equity_curve"] = equity_path
+        
+        # 2. 生成回撤圖
+        if result.equity_curve is not None and len(result.equity_curve) > 0:
+            drawdown_path = self.plot_drawdown(result.equity_curve, title)
+            if drawdown_path:
+                output_files["drawdown"] = drawdown_path
+        
+        # 3. 生成買賣點位圖（含技術指標）
+        if result.trades and len(result.trades) > 0 and price_df is not None:
+            # 轉換交易記錄
+            trades_data = []
+            for trade in result.trades:
+                trades_data.append({
+                    'entry_time': pd.to_datetime(trade.entry_datetime),
+                    'entry_price': trade.entry_price,
+                    'exit_time': pd.to_datetime(trade.exit_datetime),
+                    'exit_price': trade.exit_price,
+                    'pnl': trade.pnl,
+                    'direction': getattr(trade, 'direction', 'long'),
+                    'side': getattr(trade, 'side', 'buy'),
+                })
+            trades_df = pd.DataFrame(trades_data)
+            
+            trades_path = self.plot_trades_with_indicators(
+                trades_df, price_df, title,
+                ma_periods=ma_periods,
+            )
+            if trades_path:
+                output_files["trades"] = trades_path
+        
+        # 4. 生成 HTML 報告
+        metrics = {
+            "total_return": f"{result.total_return * 100:.2f}%" if result.total_return else "N/A",
+            "total_trades": result.total_trades,
+            "win_rate": f"{result.winning_trades / result.total_trades * 100:.1f}%" if result.total_trades > 0 else "N/A",
+            "final_equity": f"${result.final_equity:,.2f}",
+            "initial_capital": f"${result.initial_capital:,.2f}",
+        }
+        
+        html_path = self.generate_html_report(
+            title=title,
+            metrics=metrics,
+            charts=list(output_files.values()),
+            output_filename=output_filename,
+        )
+        output_files["html_report"] = html_path
+        
+        return output_files
+
+
+def generate_backtest_report(
+    result: "BacktestResult",
+    price_df: pd.DataFrame,
+    output_dir: str = "reports",
+    title: str = "Backtest Report",
+    output_filename: Optional[str] = None,
+    ma_periods: List[int] = None,
+) -> Dict[str, str]:
+    """
+    生成完整的回測報告（含買賣點位圖）
+    
+    Args:
+        result: BacktestResult 物件
+        price_df: 價格數據
+        output_dir: 輸出目錄
+        title: 報告標題
+        output_filename: 輸出檔名
+        ma_periods: MA 週期列表
+        
+    Returns:
+        生成的檔案路徑字典
+    """
+    generator = ReportGenerator(output_dir)
+    return generator.generate_backtest_report(
+        result, price_df, title, output_filename, ma_periods
+    )
 
 
 def generate_optimization_report(

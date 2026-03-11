@@ -18,7 +18,39 @@ import logging
 # 確保可以匯入模組
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from agents import AgentRole, AgentConfig, get_llm, AGENT_PROMPTS
+from core.llm_manager import get_llm
+
+# Agent 角色定義（避免循環導入）
+from enum import Enum
+from dataclasses import dataclass
+
+class AgentRole(Enum):
+    """Agent 角色定義"""
+    MARKET_MONITOR = "market_monitor"
+    RISK_MANAGER = "risk_manager"
+    STRATEGY_DEVELOPER = "strategy_dev"
+    BACKTESTER = "backtester"
+    ENGINEER = "engineer"
+    REPORTER = "reporter"
+
+@dataclass
+class AgentConfig:
+    """Agent 配置"""
+    role: AgentRole
+    model: str = "minimax/minimax-chat"
+    temperature: float = 0.7
+    max_tokens: int = 2000
+    system_prompt: str = ""
+
+# Agent Prompt 模板
+AGENT_PROMPTS = {
+    AgentRole.BACKTESTER: """你是一個回測專家。
+
+你的職責：
+- 測試交易策略的歷史表現
+- 計算關鍵指標（Sharpe, Drawdown, Win Rate）
+- 提供改進建議""",
+}
 
 logger = logging.getLogger(__name__)
 

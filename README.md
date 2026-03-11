@@ -367,6 +367,103 @@ python -m pytest tests/ -v
 2. **撮合邏輯簡化**：使用收盤價或下一根開盤價模擬交易
 3. **僅支援 Long 方向**：均線策略只實作做多，未來可擴充做空
 
+## 📖 命令總覽
+
+### 數據下載
+
+```bash
+# 下載歷史 K 線數據
+python scripts/download_data.py \
+    --symbol BTCUSDT \
+    --interval 1h \
+    --start 2023-01-01 \
+    --end 2024-01-01 \
+    --output data/BTCUSDT_1h.csv
+
+# 或使用 run_trading_system.py
+python scripts/run_trading_system.py \
+    --download \
+    --symbols BTCUSDT ETHUSDT \
+    --interval 1h \
+    --years 2
+```
+
+### 回測
+
+```bash
+# 簡單回測
+python scripts/run_backtest.py \
+    --data data/BTCUSDT_1h.csv \
+    --strategy ma_crossover \
+    --short-window 20 \
+    --long-window 50 \
+    --initial-capital 10000
+
+# 使用 run_trading_system.py
+python scripts/run_trading_system.py \
+    --backtest \
+    --data data/BTCUSDT_1h.csv \
+    --strategy ma_crossover
+```
+
+### 參數優化
+
+```bash
+# 網格搜索
+python scripts/run_grid_search.py \
+    --data data/BTCUSDT_1h.csv \
+    --short 10,20,30 \
+    --long 50,100,200 \
+    --score sharpe_ratio \
+    --top-k 10
+
+# Optuna 貝葉斯優化
+python scripts/run_optuna.py \
+    --data data/BTCUSDT_1h.csv \
+    --n-trials 100 \
+    --score sharpe_ratio
+```
+
+### Walk-Forward 測試
+
+```bash
+python scripts/run_walk_forward.py \
+    --data data/BTCUSDT_1h.csv \
+    --train-bars 2000 \
+    --test-bars 500 \
+    --step-bars 500 \
+    --strategy ma_crossover
+```
+
+### 報告生成
+
+```python
+from reports import generate_backtest_report
+from data import load_csv
+
+# 載入數據
+price_df = load_csv("data/BTCUSDT_1h.csv")
+
+# 執行回測
+from backtest import run_backtest
+result = run_backtest(...)
+
+# 生成報告（含買賣點位圖 + MA + BBand）
+output = generate_backtest_report(
+    result=result,
+    price_df=price_df,
+    title="BTCUSDT MA Cross Strategy"
+)
+
+# 輸出:
+# {
+#     'equity_curve': 'reports/equity_xxx.png',
+#     'drawdown': 'reports/drawdown_xxx.png',
+#     'trades': 'reports/trades_indicators_xxx.png',  # 含 MA/BBand
+#     'html_report': 'reports/report_xxx.html'
+# }
+```
+
 ## 🔮 未來擴充方向
 
 - 更多策略（RSI, MACD, Bollinger Bands）

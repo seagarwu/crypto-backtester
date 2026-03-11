@@ -19,7 +19,61 @@ import logging
 # 確保可以匯入模組
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from agents import AgentRole, AgentConfig, get_llm, AGENT_PROMPTS
+# 直接從 core 匯入
+from core.llm_manager import get_llm
+
+# Agent 角色定義（避免循環導入）
+from enum import Enum
+from dataclasses import dataclass
+
+class AgentRole(Enum):
+    """Agent 角色定義"""
+    MARKET_MONITOR = "market_monitor"
+    RISK_MANAGER = "risk_manager"
+    STRATEGY_DEVELOPER = "strategy_dev"
+    BACKTESTER = "backtester"
+    ENGINEER = "engineer"
+    REPORTER = "reporter"
+
+@dataclass
+class AgentConfig:
+    """Agent 配置"""
+    role: AgentRole
+    model: str = "minimax/minimax-chat"
+    temperature: float = 0.7
+    max_tokens: int = 2000
+    system_prompt: str = ""
+
+
+# Agent Prompt 模板
+AGENT_PROMPTS = {
+    AgentRole.STRATEGY_DEVELOPER: """你是一個量化策略開發專家。
+
+你的職責：
+- 根據市場狀況設計交易策略
+- 優化策略參數
+- 識別新的交易機會
+
+請提供：
+1. 策略建議
+2. 參數優化建議
+3. 風險調整後的預期收益""",
+    
+    AgentRole.BACKTESTER: """你是一個回測專家。
+
+你的職責：
+- 測試交易策略的歷史表現
+- 計算關鍵指標（Sharpe, Drawdown, Win Rate）
+- 提供改進建議""",
+    
+    AgentRole.REPORTER: """你是一個投資組合經理助手。
+
+你的職責：
+- 彙總各Agent的分析結果
+- 生成人類可讀的報告
+- 突出關鍵決策點""",
+}
+
 
 logger = logging.getLogger(__name__)
 

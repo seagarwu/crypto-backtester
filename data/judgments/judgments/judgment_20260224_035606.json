@@ -1,0 +1,9 @@
+{
+  "timestamp": "2026-02-24T03:56:06.006473",
+  "symbol": "BTCUSDT",
+  "interval": "1h",
+  "trend": "up",
+  "confidence": 0.75,
+  "notes": "Test judgment",
+  "pattern_observed": null
+}

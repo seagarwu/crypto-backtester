@@ -43,6 +43,8 @@ data/*.csv
 # Reports (ignore generated reports)
 reports/*.csv
 reports/*.md
+reports/*.png
+reports/*.html
 !reports/.gitkeep
 
 # OS

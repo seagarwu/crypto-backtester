@@ -15,6 +15,7 @@ from .output import (
 from .generator import (
     ReportGenerator,
     generate_optimization_report,
+    generate_backtest_report,
 )
 
 __all__ = [
@@ -26,4 +27,5 @@ __all__ = [
     "export_results",
     "ReportGenerator",
     "generate_optimization_report",
+    "generate_backtest_report",
 ]
