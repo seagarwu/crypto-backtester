@@ -53,6 +53,13 @@ from .trading_agent import TradingAgent, Order, Position, create_trading_agent
 # Trading System
 from .trading_system import TradingSystem, create_trading_system
 
+# Strategy R&D
+from .strategy_developer_agent import StrategyDeveloperAgent, StrategySpec, create_strategy_developer
+from .backtest_runner_agent import BacktestRunnerAgent, BacktestConfig, BacktestReport, create_backtest_runner
+from .strategy_evaluator_agent import StrategyEvaluatorAgent, EvaluationMetrics, EvaluationResult, StrategyEvaluation, create_strategy_evaluator
+from .reporter_agent import ReporterAgent, StrategyReport, create_reporter
+from .strategy_rd_workflow import StrategyRDWorkflow, RDConfig
+
 
 # ==================== Agent 默認模型配置 ====================
 
@@ -282,4 +289,22 @@ __all__ = [
     # System
     "TradingSystem",
     "create_trading_system",
+    # Strategy R&D
+    "StrategyDeveloperAgent",
+    "StrategySpec",
+    "create_strategy_developer",
+    "BacktestRunnerAgent",
+    "BacktestConfig",
+    "BacktestReport",
+    "create_backtest_runner",
+    "StrategyEvaluatorAgent",
+    "EvaluationMetrics",
+    "EvaluationResult",
+    "StrategyEvaluation",
+    "create_strategy_evaluator",
+    "ReporterAgent",
+    "StrategyReport",
+    "create_reporter",
+    "StrategyRDWorkflow",
+    "RDConfig",
 ]
