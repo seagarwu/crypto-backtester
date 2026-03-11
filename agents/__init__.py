@@ -113,7 +113,7 @@ class AgentRole(Enum):
 class AgentConfig:
     """Agent 配置"""
     role: AgentRole
-    model: str = "MiniMax-M2.5"  # MiniMax model
+    model: str = "gemini-2.0-flash"  # Gemini model
     temperature: float = 0.7
     max_tokens: int = 2000
     system_prompt: str = ""
@@ -170,6 +170,15 @@ def get_llm(config: AgentConfig):
             max_tokens=config.max_tokens,
             openai_api_key=os.environ.get("MINIMAX_API_KEY", ""),
             base_url="https://api.minimax.io/v1",  # SDK 會自動添加 /chat/completions
+        )
+    elif model_name.startswith("gemini"):
+        # Google Gemini API
+        return ChatOpenAI(
+            model=config.model,
+            temperature=config.temperature,
+            max_tokens=config.max_tokens,
+            openai_api_key=os.environ.get("GEMINI_API_KEY", ""),
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
         )
     else:
         # Default to OpenAI or OpenRouter

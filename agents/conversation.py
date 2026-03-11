@@ -81,7 +81,7 @@ CONVERSATION_SYSTEM_PROMPT = """你是一個專業的量化策略開發助手，
 class ConversationalStrategyDeveloper:
     """對話式策略開發助手"""
     
-    def __init__(self, model: str = "MiniMax-M2.5", temperature: float = 0.7):
+    def __init__(self, model: str = "gemini-2.0-flash", temperature: float = 0.7):
         # LLM 配置（懒加载）
         self._llm = None
         self._llm_config = {
