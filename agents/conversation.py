@@ -75,7 +75,55 @@ CONVERSATION_SYSTEM_PROMPT = """你是一個專業的量化策略開發助手，
 - 只有用戶明確說「好」「可以」「執行」才開始
 - 執行前必須先討論並確認所有細節
 - 如果用戶提到多週期，必須詢問具體組合方式
-- 如果用戶沒有提到優化方式，要詢問偏好"""
+- 如果用戶沒有提到優化方式，要詢問偏好
+- 執行時會詢問用戶是否需要生成新策略代碼
+- 如果需要，會調用 Engineer Agent 生成代碼"""
+
+# Engineer Agent 的系統提示詞 - 負責生成策略代碼
+ENGINEER_SYSTEM_PROMPT = """你是一個專業的量化交易策略工程師。
+
+你的職責：
+1. 根據策略規格生成完整的 Python 策略代碼
+2. 確保代碼繼承正確的 BaseStrategy 類別
+3. 實現完整的交易信號邏輯
+
+策略代碼要求：
+- 必須繼承 strategies/base.py 中的 BaseStrategy
+- 必須實現 required_indicators 屬性
+- 必須實現 calculate_signals 方法
+- 必須實現 generate_signals 方法（調用 calculate_signals）
+- 代碼要可以直接運行
+
+BaseStrategy 結構參考：
+```python
+from strategies.base import BaseStrategy, SignalType
+import pandas as pd
+
+class MyStrategy(BaseStrategy):
+    def __init__(self, param1: int = 20, param2: float = 2.0):
+        super().__init__(name="MyStrategy")
+        self.param1 = param1
+        self.param2 = param2
+    
+    @property
+    def required_indicators(self) -> list:
+        return ["MA_20", "BBAND_20"]
+    
+    def calculate_signals(self, data: pd.DataFrame, indicators: dict) -> dict:
+        # 計算交易信號
+        # 返回格式: {"signal": 1/-1/0, "strength": 0.0~1.0}
+        pass
+    
+    def generate_signals(self, data: pd.DataFrame) -> pd.Series:
+        # 生成完整信號序列
+        signals = []
+        for i in range(len(data)):
+            # 對每根 K 線計算信號
+            signals.append(0)  # 0=持有, 1=買入, -1=賣出
+        return pd.Series(signals, index=data.index)
+```
+
+請生成完整的、可直接運行的策略代碼。"""
 
 
 class ConversationalStrategyDeveloper:
@@ -104,6 +152,63 @@ class ConversationalStrategyDeveloper:
         
         # 確保有過討論才能執行
         self._has_discussed = False  # 必須經過 LLM 回應一輪
+    
+    def _save_strategy_code(self, strategy_name: str, code: str) -> str:
+        """保存生成的策略代碼到文件"""
+        import re
+        
+        # 從策略名稱生成文件名
+        safe_name = re.sub(r'[^a-zA-Z0-9_]', '_', strategy_name)
+        safe_name = re.sub(r'_+', '_', safe_name).strip('_')
+        
+        # 策略目錄
+        strategies_dir = Path(__file__).parent.parent / "strategies"
+        generated_dir = strategies_dir / "generated"
+        generated_dir.mkdir(exist_ok=True)
+        
+        filename = generated_dir / f"{safe_name}.py"
+        
+        # 添加頭部註釋
+        header = f'''"""Generated Strategy: {strategy_name}
+
+自動生成的策略代碼
+"""
+'''
+        # 寫入文件
+        with open(filename, 'w', encoding='utf-8') as f:
+            f.write(header + code)
+        
+        return str(filename)
+    
+    def _load_generated_strategy(self, strategy_name: str, filepath: str):
+        """動態加載生成的策略類別"""
+        import importlib.util
+        import re
+        
+        try:
+            # 從文件名提取類名
+            safe_name = re.sub(r'[^a-zA-Z0-9_]', '_', strategy_name)
+            safe_name = re.sub(r'_+', '_', safe_name).strip('_')
+            module_name = f"strategies.generated.{safe_name}"
+            
+            # 動態導入
+            spec = importlib.util.spec_from_file_location(module_name, filepath)
+            if spec and spec.loader:
+                module = importlib.util.module_from_spec(spec)
+                sys.modules[module_name] = module
+                spec.loader.exec_module(module)
+                
+                # 查找策略類別 (繼承 BaseStrategy 的類)
+                from strategies.base import BaseStrategy
+                for name in dir(module):
+                    obj = getattr(module, name)
+                    if isinstance(obj, type) and issubclass(obj, BaseStrategy) and obj != BaseStrategy:
+                        return obj
+            
+            return None
+        except Exception as e:
+            logger.error(f"加載策略失敗: {e}")
+            return None
     
     @property
     def llm(self):
@@ -748,15 +853,60 @@ class ConversationalStrategyDeveloper:
             
             # 載入數據
             from data import load_csv
-            from strategies import BBandStrategy, MACrossoverStrategy
             price_df = load_csv(data_path)
             
             print(f"   📊 數據載入成功: {len(price_df)} 行")
             
-            # 根據策略類型選擇策略
-            strategy_class = MACrossoverStrategy
-            if "BBand" in spec.indicators or "bbands" in str(spec.indicators).lower():
-                strategy_class = BBandStrategy
+            # ========================================
+            # 步驟 1: 詢問是否生成新策略代碼
+            # ========================================
+            print("""
+   是否需要生成新的策略代碼？
+   y) 是，讓 Engineer Agent 根據需求生成策略代碼
+   n) 否，使用現有策略
+""")
+            
+            generate_code = input("   > ").strip().lower()
+            
+            strategy_class = None
+            
+            if generate_code == "y":
+                print("""
+╔══════════════════════════════════════════════════════════╗
+║              💻 Engineer Agent 生成策略代碼            ║
+╚══════════════════════════════════════════════════════════╝
+""")
+                
+                # 生成策略代碼
+                strategy_code = self.developer.generate_strategy_code(spec)
+                
+                if strategy_code:
+                    # 保存代碼到文件
+                    strategy_filename = self._save_strategy_code(spec.name, strategy_code)
+                    print(f"   ✅ 代碼已生成並保存到: {strategy_filename}")
+                    
+                    # 動態加載策略
+                    strategy_class = self._load_generated_strategy(spec.name, strategy_filename)
+                    
+                    if strategy_class:
+                        print(f"   ✅ 策略加載成功: {strategy_class.__name__}")
+                    else:
+                        print("   ⚠️ 代碼加載失敗，回退到現有策略")
+                        strategy_class = None
+                else:
+                    print("   ⚠️ 代碼生成失敗，回退到現有策略")
+            
+            # ========================================
+            # 步驟 2: 如果沒有生成新代碼，使用現有策略
+            # ========================================
+            if strategy_class is None:
+                from strategies import BBandStrategy, MACrossoverStrategy
+                
+                # 根據策略類型選擇現有策略
+                if "BBand" in spec.indicators:
+                    strategy_class = BBandStrategy
+                else:
+                    strategy_class = MACrossoverStrategy
             
             # 執行回測 - 直接使用 engine
             from backtest.engine import BacktestEngine

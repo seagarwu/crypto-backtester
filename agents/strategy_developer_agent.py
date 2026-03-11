@@ -339,7 +339,7 @@ class StrategyDeveloperAgent:
     
     def generate_strategy_code(self, spec: StrategySpec) -> str:
         """
-        生成策略代碼
+        生成策略代碼 (Engineer Agent)
         
         Args:
             spec: 策略規格
@@ -349,69 +349,74 @@ class StrategyDeveloperAgent:
         """
         llm = self._get_llm()
         
-        prompt = f"""
-請生成完整的 Python 策略代碼：
+        # Engineer Agent prompt - 詳細的代碼生成指示
+        prompt = f"""你是一個專業的量化交易策略工程師。
+
+請根據以下策略規格生成完整的 Python 策略代碼。
 
 ## 策略規格
 - 名稱: {spec.name}
 - 描述: {spec.description}
 - 指標: {', '.join(spec.indicators)}
-- 進場規則: {spec.entry_rules}
-- 出場規則: {spec.exit_rules}
-- 參數: {json.dumps(spec.parameters)}
+- 進場規則: {spec.entry_rules or '價格觸及支撐線進場'}
+- 出場規則: {spec.exit_rules or '價格觸及壓力線出场'}
+- 參數: {spec.parameters}
 - 時間框架: {spec.timeframe}
 
 ## 輸出要求
-1. 繼承 strategies/base.py 中的 BaseStrategy
-2. 實現 required_indicators, calculate_signals 方法
-3. 包含完整的 DocString
-4. 代碼要可以直接使用
+1. 必須繼承 strategies/base.py 中的 BaseStrategy
+2. 必須實現 required_indicators 屬性
+3. 必須實現 calculate_signals 方法
+4. 必須實現 generate_signals 方法
+5. 代碼要可以直接運行
+6. 不要包含 markdown 代碼塊標記
 
-## 現有策略範例 (ma_crossover.py)
+## BaseStrategy 結構
 ```python
-\"\"\"MA Crossover Strategy\"\"\"
+from strategies.base import BaseStrategy, SignalType
+import pandas as pd
 
-from strategies.base import BaseStrategy
-
-
-class MACrossoverStrategy(BaseStrategy):
-    \"\"\"
-    移動平均線交叉策略
-    
-    進場：短均線上穿長均線
-    出場：短均線下穿長均線
-    \"\"\"
-    
-    def __init__(self, fast_ma: int = 20, slow_ma: int = 50):
-        super().__init__(name="MA_Crossover")
-        self.fast_ma = fast_ma
-        self.slow_ma = slow_ma
+class MyStrategy(BaseStrategy):
+    def __init__(self, param1: int = 20, param2: float = 2.0):
+        super().__init__(name="MyStrategy")
+        self.param1 = param1
+        self.param2 = param2
     
     @property
     def required_indicators(self) -> list:
-        return [f"MA_{self.fast_ma}", f"MA_{self.slow_ma}"]
+        return ["MA_20", "BBAND_20"]
     
-    def calculate_signals(self, data, indicators) -> dict:
-        \"\"\"計算交易信號\"\"\"
-        fast = indicators[f"MA_{self.fast_ma}"]
-        slow = indicators[f"MA_{self.slow_ma}"]
-        
-        # 最後一根K線的信號
+    def calculate_signals(self, data: pd.DataFrame, indicators: dict) -> dict:
+        # 計算交易信號
+        # 返回格式: {"signal": 1/-1/0, "strength": 0.0~1.0}
         signal = 0
-        if fast.iloc[-1] > slow.iloc[-1] and fast.iloc[-2] <= slow.iloc[-2]:
-            signal = 1  # 買入
-        elif fast.iloc[-1] < slow.iloc[-1] and fast.iloc[-2] >= slow.iloc[-2]:
-            signal = -1  # 賣出
-        
-        return {{"signal": signal, "strength": abs(fast.iloc[-1] - slow.iloc[-1]) / slow.iloc[-1]}}
+        # ... 你的邏輯
+        return {"signal": signal, "strength": 0.5}
+    
+    def generate_signals(self, data: pd.DataFrame) -> pd.Series:
+        # 生成完整信號序列
+        signals = []
+        for i in range(len(data)):
+            # 對每根 K 線計算信號
+            # 0 = 持有, 1 = 買入, -1 = 賣出
+            signals.append(SignalType.HOLD)
+        return pd.Series(signals, index=data.index)
 ```
 
-請生成 {spec.name} 的代碼：
+請生成 {spec.name} 的完整代碼（不包含 markdown 標記）：
 """
         
         try:
             response = llm.invoke(prompt)
-            return response.content
+            # 清理可能的 markdown 標記
+            code = response.content
+            if code.startswith("```python"):
+                code = code[10:]
+            elif code.startswith("```"):
+                code = code[3:]
+            if code.endswith("```"):
+                code = code[:-3]
+            return code.strip()
         except Exception as e:
             logger.error(f"代碼生成失敗: {e}")
             return ""
