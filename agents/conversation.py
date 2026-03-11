@@ -13,7 +13,9 @@ import sys
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 from datetime import datetime
+from pathlib import Path
 import logging
+import pandas as pd
 
 # 確保可以匯入模組
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -429,7 +431,6 @@ class ConversationalStrategyDeveloper:
                             df = pd.read_csv(f, parse_dates=['datetime'])
                             dfs.append(df)
                         if dfs:
-                            import pandas as pd
                             price_df = pd.concat(dfs, ignore_index=True)
                             price_df = price_df.drop_duplicates(subset=['datetime'], keep='first')
                             price_df = price_df.sort_values('datetime').reset_index(drop=True)

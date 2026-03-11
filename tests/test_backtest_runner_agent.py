@@ -57,7 +57,8 @@ class TestBacktestRunnerAgent:
     def test_agent_init_default_dir(self):
         agent = BacktestRunnerAgent()
         
-        assert agent.data_dir == "data"
+        # 預設使用專案根目錄下的 data
+        assert "data" in agent.data_dir
     
     def test_get_available_strategies(self):
         agent = BacktestRunnerAgent()
