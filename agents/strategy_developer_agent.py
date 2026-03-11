@@ -387,10 +387,10 @@ class MyStrategy(BaseStrategy):
     
     def calculate_signals(self, data: pd.DataFrame, indicators: dict) -> dict:
         # 計算交易信號
-        # 返回格式: {"signal": 1/-1/0, "strength": 0.0~1.0}
+        # 返回格式: signal=1/-1/0, strength=0.0~1.0
         signal = 0
-        # ... 你的邏輯
-        return {"signal": signal, "strength": 0.5}
+        # 你的邏輯
+        return {{"signal": signal, "strength": 0.5}}
     
     def generate_signals(self, data: pd.DataFrame) -> pd.Series:
         # 生成完整信號序列
