@@ -445,6 +445,7 @@ class ConversationalStrategyDeveloper:
             
             # 載入數據
             from data import load_csv
+            from strategies import MACrossoverStrategy
             price_df = load_csv(data_path)
             
             # 執行回測 - 直接使用 engine
