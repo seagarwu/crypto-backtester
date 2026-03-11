@@ -443,33 +443,47 @@ class ConversationalStrategyDeveloper:
             
             print(f"   📂 使用數據: {data_path}")
             
-            # 執行回測 - 使用 BacktestConfig
-            config = BacktestConfig(
-                symbol=intent["symbol"],
-                interval=intent["interval"],
-            )
+            # 載入數據
+            from data import load_csv
+            price_df = load_csv(data_path)
             
-            backtest_report = self.runner.run_backtest(
-                strategy_name="ma_crossover",
-                strategy_params=spec.parameters,
-                config=config,
+            # 執行回測 - 直接使用 engine
+            from backtest.engine import BacktestEngine
+            
+            # 創建策略
+            strategy_class = MACrossoverStrategy
+            strategy = strategy_class(**spec.parameters)
+            
+            # 生成信號
+            signals = strategy.generate_signals(price_df)
+            
+            # 執行回測
+            config = BacktestConfig(
+                symbol=intent.get("symbol", "BTCUSDT"),
+                interval=intent.get("interval", "30m"),
             )
-            self.current_result = backtest_report
+            engine = BacktestEngine(
+                initial_capital=config.initial_capital,
+                commission_rate=config.commission_rate,
+                position_size=config.position_size,
+            )
+            backtest_result = engine.run(signals, price_df)
+            self.current_result = backtest_result
             
             # 評估
             print("   📈 評估策略...")
-            evaluation = self.evaluator.evaluate(backtest_report)
+            evaluation = self.evaluator.evaluate(backtest_result)
             
             # 顯示結果
             print(f"""
 ╔══════════════════════════════════════════════════════════╗
 ║                    📊 回測結果                           ║
 ╠══════════════════════════════════════════════════════════╣
-║  Sharpe Ratio:  {backtest_report.sharpe_ratio:.2f}                        ║
-║  Max Drawdown:  {backtest_report.max_drawdown:.1f}%                        ║
-║  Win Rate:      {backtest_report.win_rate:.1f}%                        ║
-║  Total Trades:  {backtest_report.total_trades}                          ║
-║  Profit Factor: {backtest_report.profit_factor:.2f}                        ║
+║  Sharpe Ratio:  {backtest_result.sharpe_ratio:.2f}                        ║
+║  Max Drawdown:  {backtest_result.max_drawdown:.1f}%                        ║
+║  Win Rate:      {backtest_result.win_rate:.1f}%                        ║
+║  Total Trades:  {backtest_result.total_trades}                          ║
+║  Profit Factor: {backtest_result.profit_factor:.2f}                        ║
 ╠══════════════════════════════════════════════════════════╣
 ║  評估結果: {evaluation.result.name:<45}║
 ╚══════════════════════════════════════════════════════════╝
@@ -490,7 +504,7 @@ class ConversationalStrategyDeveloper:
                 price_df = load_csv(data_path)
                 
                 output = generate_backtest_report(
-                    result=backtest_report,
+                    result=backtest_result,
                     price_df=price_df,
                     title=spec.name,
                 )
