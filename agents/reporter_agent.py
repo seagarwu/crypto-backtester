@@ -38,7 +38,7 @@ class AgentRole(Enum):
 class AgentConfig:
     """Agent 配置"""
     role: AgentRole
-    model: str = "minimax/minimax-m2.5"
+    model: str = "gemini-3-flash-preview"
     temperature: float = 0.7
     max_tokens: int = 2000
     system_prompt: str = ""
@@ -115,7 +115,7 @@ class ReporterAgent:
     
     def __init__(
         self,
-        model: str = "minimax/minimax-m2.5",
+        model: str = "gemini-3-flash-preview",
     ):
         self.model = model
         self.llm = None
@@ -433,7 +433,7 @@ class ReporterAgent:
 
 
 # 便捷函數
-def create_reporter(model: str = "minimax/minimax-m2.5") -> ReporterAgent:
+def create_reporter(model: str = "gemini-3-flash-preview") -> ReporterAgent:
     """建立彙報 Agent"""
     return ReporterAgent(model=model)
 

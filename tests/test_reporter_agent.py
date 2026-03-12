@@ -25,7 +25,7 @@ class TestReporterAgent:
     def test_agent_init(self):
         agent = ReporterAgent()
         
-        assert agent.model == "minimax/minimax-m2.5"
+        assert agent.model == "gemini-3-flash-preview"
         assert agent.llm is None
     
     def test_agent_with_custom_model(self):

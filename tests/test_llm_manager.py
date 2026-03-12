@@ -42,10 +42,10 @@ class TestAvailableModels:
     
     def test_minimax_available(self):
         """Test MiniMax model is available"""
-        assert "minimax/minimax-m2.5" in AVAILABLE_MODELS
+        assert "gemini-3-flash-preview" in AVAILABLE_MODELS
         
-        config = AVAILABLE_MODELS["minimax/minimax-m2.5"]
-        assert config.cost_tier == "low"
+        config = AVAILABLE_MODELS["gemini-3-flash-preview"]
+        assert config.cost_tier == "medium"
     
     def test_gpt_models_available(self):
         """Test GPT models are available"""
@@ -120,17 +120,17 @@ class TestLLMManager:
         models = manager.list_models()
         
         assert len(models) > 0
-        assert "minimax/minimax-m2.5" in models
+        assert "gemini-3-flash-preview" in models
     
     def test_get_model_info(self):
         """Test getting model info"""
         manager = LLMManager()
         
-        info = manager.get_model_info("minimax/minimax-m2.5")
+        info = manager.get_model_info("gemini-3-flash-preview")
         
         assert info is not None
-        assert info.name == "minimax/minimax-m2.5"
-        assert info.cost_tier == "low"
+        assert info.name == "gemini-3-flash-preview"
+        assert info.cost_tier == "medium"
     
     def test_get_model_info_unknown(self):
         """Test getting info for unknown model"""

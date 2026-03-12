@@ -49,7 +49,7 @@ class TestStrategyEvaluatorAgent:
     def test_agent_init(self):
         agent = StrategyEvaluatorAgent()
         
-        assert agent.model == "minimax/minimax-m2.5"
+        assert agent.model == "gemini-3-flash-preview"
         assert isinstance(agent.metrics, EvaluationMetrics)
     
     def test_agent_with_custom_metrics(self):
