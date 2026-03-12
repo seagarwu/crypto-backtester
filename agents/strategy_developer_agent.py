@@ -379,10 +379,10 @@ class StrategyDeveloperAgent:
 3. 必須實現 calculate_signals 方法
 4. 必須實現 generate_signals 方法
 5. 代碼要可以直接運行
-6. **千萬不要包含任何 markdown 標記（```python 或 ```）**
-7. **確保所有括號 ( ) [ ] { } 都成對關閉**
-8. **確保所有字串 ' ' " " 都成對關閉**
-9. **生成的 DataFrame 格式必須正確**
+6. 千萬不要包含任何 markdown 標記
+7. 確保所有括號和都成對關閉
+8. 確保所有字串都成對關閉
+9. 生成的 DataFrame 格式必須正確
 
 ## BaseStrategy 結構（請嚴格按照這個格式）
 ```python
