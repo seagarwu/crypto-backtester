@@ -876,7 +876,16 @@ class ConversationalStrategyDeveloper:
             self._create_strategy_md(strategy_name)
         else:
             # 載入既有策略
-            self._load_strategy_md()
+            content, spec = self._load_strategy_md()
+            if content is None:
+                # 沒有找到現有檔案，提示用戶
+                print("\n📁 尚未找到任何策略發想檔案。")
+                print("   讓我幫你建立一個新的策略發想。")
+                print("\n📝 請輸入策略名稱（例如：BTCUSDT_軌道策略）")
+                strategy_name = input("   > ").strip()
+                if not strategy_name:
+                    strategy_name = "未命名策略"
+                self._create_strategy_md(strategy_name)
         
         # 顯示當前 MD 內容（如果有）
         if self.current_md_path:
