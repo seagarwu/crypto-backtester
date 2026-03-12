@@ -47,7 +47,7 @@ class TestStrategyDeveloperAgent:
     def test_agent_init(self):
         agent = StrategyDeveloperAgent()
         
-        assert agent.model == "minimax/minimax-chat"
+        assert agent.model == "gemini-3-flash-preview"
         assert agent.temperature == 0.8
         assert agent.llm is None  # 懒加载
     
