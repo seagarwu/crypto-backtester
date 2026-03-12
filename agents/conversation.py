@@ -486,6 +486,57 @@ class ConversationalStrategyDeveloper:
             timeframe=spec_dict.get('timeframe', '1h'),
         )
     
+    def _fix_syntax_errors(self, code: str) -> str:
+        """修復常見的語法錯誤"""
+        import re
+        
+        # 1. 修復未閉合的三引號字符串（docstring）
+        lines = code.split('\n')
+        fixed_lines = []
+        in_docstring = False
+        docstring_start = None
+        
+        for i, line in enumerate(lines):
+            if '"""' in line:
+                count = line.count('"""')
+                if count == 1:
+                    if not in_docstring:
+                        # Docstring 開始
+                        in_docstring = True
+                        docstring_start = i
+                        fixed_lines.append(line)
+                    else:
+                        # Docstring 結束
+                        in_docstring = False
+                        fixed_lines.append(line)
+                else:
+                    # 偶數個，直接添加
+                    fixed_lines.append(line)
+            else:
+                fixed_lines.append(line)
+        
+        # 如果還在 docstring 裡，添加關閉標記
+        if in_docstring and docstring_start is not None:
+            fixed_lines.insert(docstring_start + 1, '"""')
+        
+        code = '\n'.join(fixed_lines)
+        
+        # 2. 修復未閉合的單引號字符串
+        single_quote_count = code.count("'") - code.count("\\'")
+        if single_quote_count % 2 == 1:
+            code = code + "'"
+        
+        # 3. 移除行內的 markdown 殘餘
+        lines = code.split('\n')
+        fixed_lines = []
+        for line in lines:
+            line = re.sub(r'^```\w*$', '', line)
+            line = re.sub(r'^```$', '', line)
+            fixed_lines.append(line)
+        code = '\n'.join(fixed_lines)
+        
+        return code
+    
     def _load_generated_strategy(self, strategy_name: str, filepath: str):
         """動態加載生成的策略類別"""
         import importlib.util
@@ -493,6 +544,22 @@ class ConversationalStrategyDeveloper:
         import ast
         
         try:
+            # 嘗試修復文件中的語法錯誤
+            with open(filepath, 'r', encoding='utf-8') as f:
+                code = f.read()
+            
+            # 嘗試解析，如果失敗則嘗試修復
+            try:
+                ast.parse(code)
+            except SyntaxError as e:
+                print(f"   ⚠️ 文件語法有誤，嘗試修復: {e}")
+                code = self._fix_syntax_errors(code)
+                
+                # 寫回修復後的代碼
+                with open(filepath, 'w', encoding='utf-8') as f:
+                    f.write(code)
+                print("   🔧 已修復並保存")
+            
             # 從文件名提取類名
             safe_name = re.sub(r'[^a-zA-Z0-9_]', '_', strategy_name)
             safe_name = re.sub(r'_+', '_', safe_name).strip('_')
