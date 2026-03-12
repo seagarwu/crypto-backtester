@@ -129,7 +129,7 @@ class MyStrategy(BaseStrategy):
 class ConversationalStrategyDeveloper:
     """對話式策略開發助手"""
     
-    def __init__(self, model: str = "gemini-3-flash", temperature: float = 0.7):
+    def __init__(self, model: str = "gemini-3-flash-preview", temperature: float = 0.7):
         # LLM 配置（懒加载）
         self._llm = None
         self._llm_config = {

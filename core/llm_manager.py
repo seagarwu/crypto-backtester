@@ -74,11 +74,11 @@ AVAILABLE_MODELS: Dict[str, ModelConfig] = {
     ),
     
     # Gemini 系列 (Google AI)
-    "gemini-3-flash": ModelConfig(
-        name="gemini-3-flash",
+    "gemini-3-flash-preview": ModelConfig(
+        name="gemini-3-flash-preview",
         provider=ModelProvider.GEMINI,
         temperature=0.7,
-        description="Gemini 3 Flash - 最新版本",
+        description="Gemini 3 Flash Preview - 取代 gemini-2.5-flash",
         strengths=["最新", "強大推理", "多模態"],
         weaknesses=[],
         cost_tier="medium",
@@ -256,7 +256,7 @@ class LLMManager:
         """
         # 默認模型
         if model_name is None:
-            model_name = "gemini-3-flash"  # 默認使用 Gemini 3 Flash
+            model_name = "gemini-3-flash-preview"  # 默認使用 Gemini 3 Flash
         
         # 緩存 key
         cache_key = f"{model_name}_{temperature}_{max_tokens}"
@@ -311,7 +311,7 @@ class LLMManager:
         elif model_config.provider == ModelProvider.GEMINI:
             # Google Gemini API (OpenAI compatible)
             llm = ChatOpenAI(
-                model=model_name,  # 如 "gemini-3-flash"
+                model=model_name,  # 如 "gemini-3-flash-preview"
                 temperature=temperature,
                 max_tokens=max_tokens,
                 openai_api_key=api_key or os.environ.get("GEMINI_API_KEY", ""),
