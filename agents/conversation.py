@@ -448,27 +448,37 @@ class ConversationalStrategyDeveloper:
                 spec.loader.exec_module(module)
                 
                 # 查找策略類別 (繼承 BaseStrategy 的類)
-                from strategies.base import BaseStrategy
-                strategy_class = None
+                from strategies.base import BaseStrategy, SignalType
+                original_class = None
                 for name in dir(module):
                     obj = getattr(module, name)
                     if isinstance(obj, type) and issubclass(obj, BaseStrategy) and obj != BaseStrategy:
-                        strategy_class = obj
+                        original_class = obj
                         break
                 
-                # 如果缺少 generate_signals，添加默認實現
-                if strategy_class and not hasattr(strategy_class, 'generate_signals'):
+                if original_class is None:
+                    return None
+                
+                # 檢查是否有 generate_signals 方法（不是從父類繼承的）
+                has_own_generate = 'generate_signals' in original_class.__dict__
+                
+                if not has_own_generate:
                     print(f"   ⚠️ 缺少 generate_signals，添加默認實現")
                     
+                    # 動態創建新類，繼承原始類並實現 generate_signals
                     def default_generate_signals(self, data):
-                        import pandas as pd
-                        from strategies.base import SignalType
                         signals = [SignalType.HOLD] * len(data)
                         return pd.Series(signals, index=data.index)
                     
-                    strategy_class.generate_signals = default_generate_signals
+                    # 創建新的子類
+                    NewClass = type(
+                        original_class.__name__ + '_WithSignals',
+                        (original_class,),
+                        {'generate_signals': default_generate_signals}
+                    )
+                    return NewClass
                 
-                return strategy_class
+                return original_class
             
             return None
         except Exception as e:
