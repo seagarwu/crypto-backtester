@@ -10,6 +10,7 @@ Conversational Strategy Developer - 對話式策略開發助手
 
 import os
 import sys
+import re
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 from datetime import datetime
@@ -197,8 +198,8 @@ class ConversationalStrategyDeveloper:
         # 確保目錄存在
         self.md_dir.mkdir(parents=True, exist_ok=True)
         
-        # 列出所有 MD 文件
-        md_files = list(self.md_dir.glob("*.md"))
+        # 列出所有 MD 文件（排序以確保順序穩定）
+        md_files = sorted(self.md_dir.glob("*.md"))
         
         if not md_files:
             return None, None
@@ -340,6 +341,7 @@ class ConversationalStrategyDeveloper:
         Returns:
             StrategySpec: 策略規格
         """
+        
         spec_dict = {}
         
         # 解析策略規格區塊
@@ -356,7 +358,7 @@ class ConversationalStrategyDeveloper:
                     key, value = line[2:].split(': ', 1)
                     key = key.strip()
                     value = value.strip()
-                    
+
                     if key == "名稱":
                         spec_dict['name'] = value
                     elif key == "描述":
@@ -366,7 +368,11 @@ class ConversationalStrategyDeveloper:
                         spec_dict['indicators'] = [x.strip() for x in value.strip('[]').split(',')]
                     elif key == "進場規則":
                         spec_dict['entry_rules'] = value
-                    elif key == "出台則":
+                    elif key.startswith('出台') or key.startswith('出场') or key.startswith('出讓') or key.startswith('\u51FA\u5834') or key.startswith('\u51FA\u573A'):
+                        # Support both Simplified (出台/出场) and Traditional (出台/出场) Chinese
+                        spec_dict['exit_rules'] = value
+                    elif '出' in key and '規則' in key and '進' not in key:
+                        # Fallback: any key containing "出" and "規則" but not "進"
                         spec_dict['exit_rules'] = value
                     elif key == "參數":
                         # 解析 dict
