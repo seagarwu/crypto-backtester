@@ -161,6 +161,7 @@ class ConversationalStrategyDeveloper:
     def _save_strategy_code(self, strategy_name: str, code: str) -> str:
         """保存生成的策略代碼到文件"""
         import re
+        import ast
         
         # 從策略名稱生成文件名
         safe_name = re.sub(r'[^a-zA-Z0-9_]', '_', strategy_name)
@@ -179,9 +180,43 @@ class ConversationalStrategyDeveloper:
 自動生成的策略代碼
 """
 '''
+        
+        # 驗證代碼語法
+        full_code = header + code
+        try:
+            ast.parse(full_code)
+            print("   ✅ 代碼語法驗證通過")
+        except SyntaxError as e:
+            print(f"   ⚠️ 代碼語法有誤: {e}")
+            print("   嘗試修復...")
+            
+            # 嘗試自動修復常見問題
+            # 1. 移除可能的 markdown 標記
+            code = code.replace("```python", "").replace("```", "")
+            
+            # 2. 嘗試修復未閉合的括號
+            lines = code.split('\n')
+            fixed_lines = []
+            for line in lines:
+                # 移除行內的 markdown 殘餘
+                line = re.sub(r'^```\w*$', '', line)
+                line = re.sub(r'^```$', '', line)
+                fixed_lines.append(line)
+            code = '\n'.join(fixed_lines)
+            
+            full_code = header + code
+            
+            try:
+                ast.parse(full_code)
+                print("   ✅ 代碼已修復並通過驗證")
+            except SyntaxError as e2:
+                print(f"   ❌ 無法修復語法錯誤: {e2}")
+                # 仍然保存，但會在載入時失敗
+                print("   💾 仍保存檔案，載入時會使用回退策略")
+        
         # 寫入文件
         with open(filename, 'w', encoding='utf-8') as f:
-            f.write(header + code)
+            f.write(full_code)
         
         return str(filename)
     

@@ -367,21 +367,24 @@ class StrategyDeveloperAgent:
 ## 策略規格
 - 名稱: {spec.name}
 - 描述: {spec.description}
-- 指數: {', '.join(spec.indicators)}
+- 指標: {', '.join(spec.indicators)}
 - 進場規則: {spec.entry_rules or '價格觸及支撐線進場'}
 - 出場規則: {spec.exit_rules or '價格觸及壓力線出场'}
 - 參數: {spec.parameters}
 - 時間框架: {spec.timeframe}
 
-## 輸出要求
+## 輸出要求（非常重要，請嚴格遵守）
 1. 必須繼承 strategies/base.py 中的 BaseStrategy
 2. 必須實現 required_indicators 屬性
 3. 必須實現 calculate_signals 方法
 4. 必須實現 generate_signals 方法
 5. 代碼要可以直接運行
-6. 不要包含 markdown 代碼塊標記
+6. **千萬不要包含任何 markdown 標記（```python 或 ```）**
+7. **確保所有括號 ( ) [ ] { } 都成對關閉**
+8. **確保所有字串 ' ' " " 都成對關閉**
+9. **生成的 DataFrame 格式必須正確**
 
-## BaseStrategy 結構
+## BaseStrategy 結構（請嚴格按照這個格式）
 ```python
 from strategies.base import BaseStrategy, SignalType
 import pandas as pd
@@ -397,23 +400,15 @@ class MyStrategy(BaseStrategy):
         return ["MA_20", "BBAND_20"]
     
     def calculate_signals(self, data: pd.DataFrame, indicators: dict) -> dict:
-        # 計算交易信號
-        # 返回格式: signal=1/-1/0, strength=0.0~1.0
         signal = 0
-        # 你的邏輯
         return {{"signal": signal, "strength": 0.5}}
     
     def generate_signals(self, data: pd.DataFrame) -> pd.Series:
-        # 生成完整信號序列
-        signals = []
-        for i in range(len(data)):
-            # 對每根 K 線計算信號
-            # 0 = 持有, 1 = 買入, -1 = 賣出
-            signals.append(SignalType.HOLD)
+        signals = [SignalType.HOLD] * len(data)
         return pd.Series(signals, index=data.index)
 ```
 
-請生成 {spec.name} 的完整代碼（不包含 markdown 標記）：
+請生成 {spec.name} 的完整代碼（直接輸出 Python 程式碼，不要有任何標記）：
 """)
         
         prompt = "".join(prompt_parts)
