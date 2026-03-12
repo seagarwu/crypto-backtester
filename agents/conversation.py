@@ -194,11 +194,48 @@ class ConversationalStrategyDeveloper:
             # 1. 移除可能的 markdown 標記
             code = code.replace("```python", "").replace("```", "")
             
-            # 2. 嘗試修復未閉合的括號
+            # 2. 修復未閉合的三引號字符串（docstring）
+            lines = code.split('\n')
+            fixed_lines = []
+            in_docstring = False
+            docstring_start = None
+            
+            for i, line in enumerate(lines):
+                if '"""' in line:
+                    count = line.count('"""')
+                    if count == 1:
+                        if not in_docstring:
+                            # Docstring 開始
+                            in_docstring = True
+                            docstring_start = i
+                            fixed_lines.append(line)
+                        else:
+                            # Docstring 結束
+                            in_docstring = False
+                            fixed_lines.append(line)
+                    else:
+                        # 偶數個，直接添加
+                        fixed_lines.append(line)
+                else:
+                    fixed_lines.append(line)
+            
+            # 如果還在 docstring 裡，添加關閉標記
+            if in_docstring and docstring_start is not None:
+                fixed_lines.insert(docstring_start + 1, '"""')
+                print("   🔧 已修復未閉合的三引號/docstring")
+            
+            code = '\n'.join(fixed_lines)
+            
+            # 3. 修復未閉合的單引號字符串
+            single_quote_count = code.count("'") - code.count("\\'")
+            if single_quote_count % 2 == 1:
+                code = code + "'"
+                print("   🔧 已修復未閉合的單引號")
+            
+            # 4. 移除行內的 markdown 殘餘
             lines = code.split('\n')
             fixed_lines = []
             for line in lines:
-                # 移除行內的 markdown 殘餘
                 line = re.sub(r'^```\w*$', '', line)
                 line = re.sub(r'^```$', '', line)
                 fixed_lines.append(line)
@@ -211,6 +248,27 @@ class ConversationalStrategyDeveloper:
                 print("   ✅ 代碼已修復並通過驗證")
             except SyntaxError as e2:
                 print(f"   ❌ 無法修復語法錯誤: {e2}")
+                # 嘗試最保守的方法：移除所有三引號，只保留代碼
+                # 這是最後的補救措施
+                print("   🔄 嘗試最後補救...")
+                # 移除 markdown 代碼塊
+                code = re.sub(r'^```.*', '', code, flags=re.MULTILINE)
+                code = re.sub(r'```$', '', code, flags=re.MULTILINE)
+                # 嘗試找類定義
+                class_match = re.search(r'class\s+(\w+)\([^)]+\):', code)
+                if class_match:
+                    print(f"   ⚠️ 找到類定義: {class_match.group(1)}，使用最小化修復")
+                    # 添加最小實現
+                    code = code.strip()
+                    if 'def generate_signals' not in code:
+                        code += '\n\n    def generate_signals(self, data):\n        from strategies.base import SignalType\n        return [SignalType.HOLD] * len(data)'
+                    full_code = header + code
+                    try:
+                        ast.parse(full_code)
+                        print("   ✅ 補救成功")
+                    except:
+                        pass
+                
                 # 仍然保存，但會在載入時失敗
                 print("   💾 仍保存檔案，載入時會使用回退策略")
         
