@@ -432,6 +432,7 @@ class ConversationalStrategyDeveloper:
         """動態加載生成的策略類別"""
         import importlib.util
         import re
+        import ast
         
         try:
             # 從文件名提取類名
@@ -448,10 +449,26 @@ class ConversationalStrategyDeveloper:
                 
                 # 查找策略類別 (繼承 BaseStrategy 的類)
                 from strategies.base import BaseStrategy
+                strategy_class = None
                 for name in dir(module):
                     obj = getattr(module, name)
                     if isinstance(obj, type) and issubclass(obj, BaseStrategy) and obj != BaseStrategy:
-                        return obj
+                        strategy_class = obj
+                        break
+                
+                # 如果缺少 generate_signals，添加默認實現
+                if strategy_class and not hasattr(strategy_class, 'generate_signals'):
+                    print(f"   ⚠️ 缺少 generate_signals，添加默認實現")
+                    
+                    def default_generate_signals(self, data):
+                        import pandas as pd
+                        from strategies.base import SignalType
+                        signals = [SignalType.HOLD] * len(data)
+                        return pd.Series(signals, index=data.index)
+                    
+                    strategy_class.generate_signals = default_generate_signals
+                
+                return strategy_class
             
             return None
         except Exception as e:
