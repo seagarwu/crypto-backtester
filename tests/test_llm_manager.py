@@ -42,9 +42,9 @@ class TestAvailableModels:
     
     def test_minimax_available(self):
         """Test MiniMax model is available"""
-        assert "minimax/minimax-chat" in AVAILABLE_MODELS
+        assert "minimax/minimax-m2.5" in AVAILABLE_MODELS
         
-        config = AVAILABLE_MODELS["minimax/minimax-chat"]
+        config = AVAILABLE_MODELS["minimax/minimax-m2.5"]
         assert config.cost_tier == "low"
     
     def test_gpt_models_available(self):
@@ -120,16 +120,16 @@ class TestLLMManager:
         models = manager.list_models()
         
         assert len(models) > 0
-        assert "minimax/minimax-chat" in models
+        assert "minimax/minimax-m2.5" in models
     
     def test_get_model_info(self):
         """Test getting model info"""
         manager = LLMManager()
         
-        info = manager.get_model_info("minimax/minimax-chat")
+        info = manager.get_model_info("minimax/minimax-m2.5")
         
         assert info is not None
-        assert info.name == "minimax/minimax-chat"
+        assert info.name == "minimax/minimax-m2.5"
         assert info.cost_tier == "low"
     
     def test_get_model_info_unknown(self):
