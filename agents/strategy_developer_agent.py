@@ -336,12 +336,13 @@ class StrategyDeveloperAgent:
         
         return "\n".join(issues)
     
-    def generate_strategy_code(self, spec: StrategySpec) -> str:
+    def generate_strategy_code(self, spec: StrategySpec, md_context: str = None) -> str:
         """
         生成策略代碼 (Engineer Agent)
         
         Args:
             spec: 策略規格
+            md_context: 策略發想 MD 的內容（可選，用於提供更多上下文）
             
         Returns:
             str: Python 代碼
@@ -349,14 +350,24 @@ class StrategyDeveloperAgent:
         llm = self._get_llm()
         
         # Engineer Agent prompt - 詳細的代碼生成指示
-        prompt = f"""你是一個專業的量化交易策略工程師。
+        prompt_parts = []
+        
+        # 如果有 MD 上下文，添加到開頭
+        if md_context:
+            prompt_parts.append(f"""## 之前的討論歷史（請務必閱讀）
+{md_context}
+
+---
+""")
+        
+        prompt_parts.append(f"""你是一個專業的量化交易策略工程師。
 
 請根據以下策略規格生成完整的 Python 策略代碼。
 
 ## 策略規格
 - 名稱: {spec.name}
 - 描述: {spec.description}
-- 指標: {', '.join(spec.indicators)}
+- 指數: {', '.join(spec.indicators)}
 - 進場規則: {spec.entry_rules or '價格觸及支撐線進場'}
 - 出場規則: {spec.exit_rules or '價格觸及壓力線出场'}
 - 參數: {spec.parameters}
@@ -403,7 +414,9 @@ class MyStrategy(BaseStrategy):
 ```
 
 請生成 {spec.name} 的完整代碼（不包含 markdown 標記）：
-"""
+""")
+        
+        prompt = "".join(prompt_parts)
         
         try:
             response = llm.invoke(prompt)

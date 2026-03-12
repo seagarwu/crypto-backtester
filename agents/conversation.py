@@ -147,6 +147,10 @@ class ConversationalStrategyDeveloper:
         self.current_strategy: Optional[StrategySpec] = None
         self.current_result: Optional["BacktestReport"] = None
         
+        # 策略發想 MD 文件管理
+        self.md_dir = Path(__file__).parent.parent / "strategies" / "ideas"
+        self.current_md_path: Optional[Path] = None
+        
         # 標記是否正在執行
         self.is_executing = False
         
@@ -179,6 +183,209 @@ class ConversationalStrategyDeveloper:
             f.write(header + code)
         
         return str(filename)
+    
+    # ========================================
+    # 策略發想 MD 文件管理
+    # ========================================
+    
+    def _load_strategy_md(self) -> tuple:
+        """載入策略發想 MD 文件
+        
+        Returns:
+            (md_content, spec): (MD內容, StrategySpec)
+        """
+        # 確保目錄存在
+        self.md_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 列出所有 MD 文件
+        md_files = list(self.md_dir.glob("*.md"))
+        
+        if not md_files:
+            return None, None
+        
+        print("\n📁 找到以下策略發想檔案：")
+        for i, f in enumerate(md_files):
+            # 讀取標題
+            content = f.read_text(encoding='utf-8')
+            title = content.split('\n')[0].replace('# ', '') if content else f.stem
+            print(f"   {i+1}. {title} ({f.name})")
+        
+        print(f"   0. 🆕 新建策略發想")
+        
+        choice = input("\n   請選擇 (編號): ").strip()
+        
+        if choice == "0" or not md_files:
+            return None, None
+        
+        try:
+            idx = int(choice) - 1
+            if 0 <= idx < len(md_files):
+                self.current_md_path = md_files[idx]
+                content = md_files[idx].read_text(encoding='utf-8')
+                spec = self._parse_md_to_spec(content)
+                print(f"\n✅ 已載入: {md_files[idx].name}")
+                return content, spec
+        except ValueError:
+            pass
+        
+        return None, None
+    
+    def _create_strategy_md(self, name: str) -> Path:
+        """建立新的策略發想 MD 文件
+        
+        Args:
+            name: 策略名稱
+            
+        Returns:
+            Path: MD 文件路徑
+        """
+        self.md_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 生成文件名
+        safe_name = re.sub(r'[^a-zA-Z0-9_]', '_', name)
+        safe_name = re.sub(r'_+', '_', safe_name).strip('_')
+        filename = self.md_dir / f"{safe_name}.md"
+        
+        # 如果已存在，則覆蓋
+        content = f"""# {name}
+
+## 討論歷史
+
+## 策略規格
+
+"""
+        filename.write_text(content, encoding='utf-8')
+        self.current_md_path = filename
+        
+        print(f"\n✅ 已建立: {filename.name}")
+        return filename
+    
+    def _update_strategy_md(self, user_input: str = None, assistant_response: str = None, spec: "StrategySpec" = None, generated_file: str = None):
+        """更新策略發想 MD 文件
+        
+        Args:
+            user_input: 用戶輸入
+            assistant_response: 助手回應
+            spec: 策略規格
+            generated_file: 生成的程式檔名
+        """
+        if not self.current_md_path:
+            return
+        
+        content = self.current_md_path.read_text(encoding='utf-8')
+        lines = content.split('\n')
+        
+        # 更新討論歷史
+        if user_input:
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+            lines.append(f"- {timestamp}: 用戶: \"{user_input[:100]}...\"")
+        
+        if assistant_response:
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+            lines.append(f"- {timestamp}: 助手: \"{assistant_response[:100]}...\"")
+        
+        # 更新策略規格
+        if spec:
+            # 找到策略規格區塊
+            spec_start = -1
+            for i, line in enumerate(lines):
+                if line.strip() == "## 策略規格":
+                    spec_start = i
+                    break
+            
+            if spec_start >= 0:
+                # 構建新的規格內容
+                spec_lines = [
+                    f"- 名稱: {spec.name}",
+                    f"- 描述: {spec.description}",
+                    f"- 指標: {spec.indicators}",
+                    f"- 進場規則: {spec.entry_rules or '待確認'}",
+                    f"- 出場規則: {spec.exit_rules or '待確認'}",
+                    f"- 參數: {spec.parameters}",
+                    f"- 時間框架: {spec.timeframe}",
+                ]
+                
+                # 找到下一個區塊
+                spec_end = spec_start + 1
+                while spec_end < len(lines) and not lines[spec_end].startswith('## '):
+                    spec_end += 1
+                
+                # 替換
+                lines = lines[:spec_start+1] + spec_lines + lines[spec_end:]
+        
+        # 更新生成檔案
+        if generated_file:
+            # 找到生成檔案區塊
+            gen_start = -1
+            for i, line in enumerate(lines):
+                if line.strip() == "## 生成檔案":
+                    gen_start = i
+                    break
+            
+            if gen_start == -1:
+                lines.append("\n## 生成檔案")
+                lines.append(f"- {generated_file}")
+            else:
+                lines.append(f"- {generated_file}")
+        
+        # 寫回文件
+        self.current_md_path.write_text('\n'.join(lines), encoding='utf-8')
+    
+    def _parse_md_to_spec(self, content: str) -> "StrategySpec":
+        """從 MD 內容解析出 StrategySpec
+        
+        Args:
+            content: MD 文件內容
+            
+        Returns:
+            StrategySpec: 策略規格
+        """
+        spec_dict = {}
+        
+        # 解析策略規格區塊
+        in_spec = False
+        for line in content.split('\n'):
+            if line.strip() == "## 策略規格":
+                in_spec = True
+                continue
+            if in_spec and line.startswith('## '):
+                break
+            if in_spec and line.startswith('- '):
+                # 解析 key: value
+                if ': ' in line:
+                    key, value = line[2:].split(': ', 1)
+                    key = key.strip()
+                    value = value.strip()
+                    
+                    if key == "名稱":
+                        spec_dict['name'] = value
+                    elif key == "描述":
+                        spec_dict['description'] = value
+                    elif key == "指標":
+                        # 解析列表
+                        spec_dict['indicators'] = [x.strip() for x in value.strip('[]').split(',')]
+                    elif key == "進場規則":
+                        spec_dict['entry_rules'] = value
+                    elif key == "出台則":
+                        spec_dict['exit_rules'] = value
+                    elif key == "參數":
+                        # 解析 dict
+                        try:
+                            spec_dict['parameters'] = eval(value)
+                        except:
+                            spec_dict['parameters'] = {}
+                    elif key == "時間框架":
+                        spec_dict['timeframe'] = value
+        
+        return StrategySpec(
+            name=spec_dict.get('name', '未命名策略'),
+            description=spec_dict.get('description', ''),
+            indicators=spec_dict.get('indicators', []),
+            entry_rules=spec_dict.get('entry_rules', ''),
+            exit_rules=spec_dict.get('exit_rules', ''),
+            parameters=spec_dict.get('parameters', {}),
+            timeframe=spec_dict.get('timeframe', '1h'),
+        )
     
     def _load_generated_strategy(self, strategy_name: str, filepath: str):
         """動態加載生成的策略類別"""
@@ -640,9 +847,53 @@ class ConversationalStrategyDeveloper:
         """運行對話式開發"""
         self.print_welcome()
         
+        # ========================================
+        # 步驟 1: 詢問新建或載入
+        # ========================================
+        print("""
+📝 請選擇：
+   1. 🆕 新建策略發想
+   2. 📂 載入既有策略發想
+""")
+        while True:
+            choice = input("   請選擇 (1/2): ").strip()
+            if choice in ["1", "2"]:
+                break
+            print("   ⚠️ 請輸入 1 或 2")
+        
+        if choice == "1":
+            # 新建策略發想
+            print("\n📝 請輸入策略名稱（例如：BTCUSDT_軌道策略）")
+            strategy_name = input("   > ").strip()
+            if not strategy_name:
+                strategy_name = "未命名策略"
+            self._create_strategy_md(strategy_name)
+        else:
+            # 載入既有策略
+            self._load_strategy_md()
+        
+        # 顯示當前 MD 內容（如果有）
+        if self.current_md_path:
+            content = self.current_md_path.read_text(encoding='utf-8')
+            # 顯示討論歷史部分
+            lines = content.split('\n')
+            in_history = False
+            print("\n" + "=" * 50)
+            print("📜 之前的討論歷史：")
+            print("=" * 50)
+            for line in lines:
+                if line.strip() == "## 討論歷史":
+                    in_history = True
+                    continue
+                if in_history and line.startswith('## '):
+                    break
+                if in_history:
+                    print(f"   {line}")
+            print("=" * 50)
+        
         # 初始問候
-        print("\n👋 你好！請告訴我你想開發什麼樣的策略。")
-        print("   例如：\"我想做比特幣一小時的短線策略\"")
+        print("\n👋 你好！請繼續告訴我你想如何調整策略。")
+        print("   或者告訴我「好」來執行目前的策略。")
         
         while True:
             try:
@@ -669,6 +920,8 @@ class ConversationalStrategyDeveloper:
                 # 標記已經過一輪討論（只有 LLM 成功回應才算）
                 if llm_response:
                     self._has_discussed = True
+                    # 更新 MD 文件
+                    self._update_strategy_md(user_input=user_input, assistant_response=llm_response)
                 
                 # 檢查是否應該執行
                 if self._should_execute(user_input, llm_response):
@@ -877,13 +1130,21 @@ class ConversationalStrategyDeveloper:
 ╚══════════════════════════════════════════════════════════╝
 """)
                 
-                # 生成策略代碼
-                strategy_code = self.developer.generate_strategy_code(spec)
+                # 獲取 MD 上下文
+                md_context = None
+                if self.current_md_path:
+                    md_context = self.current_md_path.read_text(encoding='utf-8')
+                
+                # 生成策略代碼（傳入 MD 上下文）
+                strategy_code = self.developer.generate_strategy_code(spec, md_context=md_context)
                 
                 if strategy_code:
                     # 保存代碼到文件
                     strategy_filename = self._save_strategy_code(spec.name, strategy_code)
                     print(f"   ✅ 代碼已生成並保存到: {strategy_filename}")
+                    
+                    # 更新 MD 文件
+                    self._update_strategy_md(spec=spec, generated_file=strategy_filename)
                     
                     # 動態加載策略
                     strategy_class = self._load_generated_strategy(spec.name, strategy_filename)
