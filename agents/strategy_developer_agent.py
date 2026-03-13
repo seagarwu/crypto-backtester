@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 import json
 import logging
+import re
+import ast
 
 # 確保可以匯入模組
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -89,6 +91,15 @@ class StrategySpec:
     parameters: Dict[str, Any] = field(default_factory=dict)
     timeframe: str = "1h"
     risk_level: str = "medium"
+
+
+@dataclass
+class EngineerCodeResult:
+    """Engineer Agent 的結構化代碼輸出。"""
+    code: str
+    summary: str = ""
+    assumptions: List[str] = field(default_factory=list)
+    raw_response: str = ""
 
 
 class StrategyDeveloperAgent:
@@ -348,70 +359,50 @@ class StrategyDeveloperAgent:
             str: Python 代碼
         """
         llm = self._get_llm()
-        
-        # Engineer Agent prompt - 詳細的代碼生成指示
-        prompt_parts = []
-        
-        # 如果有 MD 上下文，添加到開頭
-        if md_context:
-            prompt_parts.append(f"""## 之前的討論歷史（請務必閱讀）
-{md_context}
 
----
-""")
-        
-        prompt_parts.append(f"""你是一個專業的量化交易策略工程師。
+        context = self._extract_strategy_context(md_context)
 
-請根據以下策略規格生成完整的 Python 策略代碼。
+        prompt = f"""你是一個專業的量化交易策略工程師。
 
-## 策略規格
+任務：根據下列策略規格，直接輸出完整可執行的 Python 原始碼。
+
+限制：
+1. 只輸出 Python 原始碼。
+2. 不要輸出 markdown。
+3. 不要輸出說明文字。
+4. 第一行必須是 import 或 from。
+5. 程式碼中必須包含一個繼承 BaseStrategy 的 class。
+6. 必須實作 required_indicators、calculate_signals、generate_signals。
+7. generate_signals 必須回傳 pandas.Series，index=data.index。
+
+策略規格：
 - 名稱: {spec.name}
 - 描述: {spec.description}
 - 指標: {', '.join(spec.indicators)}
 - 進場規則: {spec.entry_rules or '價格觸及支撐線進場'}
-- 出場規則: {spec.exit_rules or '價格觸及壓力線出场'}
+- 出場規則: {spec.exit_rules or '價格觸及壓力線出場'}
 - 參數: {spec.parameters}
 - 時間框架: {spec.timeframe}
+- 風險等級: {spec.risk_level}
 
-## 輸出要求（非常重要，請嚴格遵守）
-1. 必須繼承 strategies/base.py 中的 BaseStrategy
-2. 必須實現 required_indicators 屬性
-3. 必須實現 calculate_signals 方法
-4. 必須實現 generate_signals 方法
-5. 代碼要可以直接運行
-6. 千萬不要包含任何 markdown 標記
-7. 確保所有括號和都成對關閉
-8. 確保所有字串都成對關閉
-9. 生成的 DataFrame 格式必須正確
+補充上下文：
+{context or '無'}
 
-## BaseStrategy 結構（請嚴格按照這個格式）
-```python
+必要程式骨架：
 from strategies.base import BaseStrategy, SignalType
 import pandas as pd
 
-class MyStrategy(BaseStrategy):
-    def __init__(self, param1: int = 20, param2: float = 2.0):
-        super().__init__(name="MyStrategy")
-        self.param1 = param1
-        self.param2 = param2
-    
+class StrategyName(BaseStrategy):
     @property
     def required_indicators(self) -> list:
-        return ["MA_20", "BBAND_20"]
-    
-    def calculate_signals(self, data: pd.DataFrame, indicators: dict) -> dict:
-        signal = 0
-        return {{"signal": signal, "strength": 0.5}}
-    
-    def generate_signals(self, data: pd.DataFrame) -> pd.Series:
-        signals = [SignalType.HOLD] * len(data)
-        return pd.Series(signals, index=data.index)
-```
+        return []
 
-請生成 {spec.name} 的完整代碼（直接輸出 Python 程式碼，不要有任何標記）：
-""")
-        
-        prompt = "".join(prompt_parts)
+    def calculate_signals(self, data: pd.DataFrame, indicators: dict) -> dict:
+        return {{"signal": SignalType.HOLD, "strength": 0.0}}
+
+    def generate_signals(self, data: pd.DataFrame) -> pd.Series:
+        return pd.Series([SignalType.HOLD] * len(data), index=data.index)
+"""
         
         try:
             response = llm.invoke(prompt)
@@ -428,6 +419,396 @@ class MyStrategy(BaseStrategy):
             logger.error(f"代碼生成失敗: {e}")
             return ""
 
+    def generate_strategy_code_structured(
+        self,
+        spec: StrategySpec,
+        md_context: str = None,
+        feedback: Optional[Dict[str, Any]] = None,
+        previous_code: str = "",
+    ) -> EngineerCodeResult:
+        """生成結構化代碼輸出，便於後續驗證與迭代。"""
+        llm = self._get_llm()
+        context = self._extract_strategy_context(md_context)
+        feedback_text = json.dumps(feedback or {}, ensure_ascii=False, indent=2)
+        prompt = self._build_structured_code_prompt(
+            spec=spec,
+            context=context,
+            feedback_text=feedback_text,
+            previous_code=previous_code,
+        )
+
+        try:
+            response = llm.invoke(prompt)
+            raw = response.content if hasattr(response, "content") else str(response)
+            data = self._parse_structured_response(raw)
+            code = self._clean_code_block(str(data.get("code", "")))
+            return EngineerCodeResult(
+                code=code,
+                summary=str(data.get("summary", "")),
+                assumptions=[str(item) for item in data.get("assumptions", [])],
+                raw_response=raw,
+            )
+        except Exception as e:
+            logger.error(f"結構化代碼生成失敗: {e}")
+            fallback_code = self.generate_strategy_code(spec, md_context=md_context)
+            return EngineerCodeResult(
+                code=fallback_code,
+                summary="Fallback to legacy code generation",
+                assumptions=[],
+                raw_response="",
+            )
+
+    def revise_strategy_code(
+        self,
+        spec: StrategySpec,
+        feedback: Dict[str, Any],
+        previous_code: str,
+        md_context: str = None,
+    ) -> EngineerCodeResult:
+        """根據上一輪 feedback 修正策略程式碼。"""
+        llm = self._get_llm()
+        context = self._extract_strategy_context(md_context)
+        feedback_text = json.dumps(feedback or {}, ensure_ascii=False, indent=2)
+        prompt = self._build_revision_prompt(
+            spec=spec,
+            context=context,
+            feedback_text=feedback_text,
+            previous_code=previous_code,
+        )
+
+        try:
+            response = llm.invoke(prompt)
+            raw = response.content if hasattr(response, "content") else str(response)
+            data = self._parse_structured_response(raw)
+            code = self._clean_code_block(str(data.get("code", "")))
+            return EngineerCodeResult(
+                code=code,
+                summary=str(data.get("summary", "")),
+                assumptions=[str(item) for item in data.get("assumptions", [])],
+                raw_response=raw,
+            )
+        except Exception as e:
+            logger.error(f"修正代碼生成失敗: {e}")
+            return EngineerCodeResult(
+                code=previous_code,
+                summary="Fallback to previous code",
+                assumptions=[],
+                raw_response="",
+            )
+
+    def _build_structured_code_prompt(
+        self,
+        spec: StrategySpec,
+        context: str,
+        feedback_text: str,
+        previous_code: str,
+    ) -> str:
+        """建立首輪或全量重生成 prompt。"""
+        return f"""你是一個專業的量化交易策略工程師。
+
+請根據策略規格、前一輪代碼與 feedback，輸出嚴格的三個區塊。
+不要輸出 markdown，不要輸出額外說明，不要輸出 JSON。
+
+輸出格式必須完全如下：
+<SUMMARY>
+本輪修改摘要
+</SUMMARY>
+<ASSUMPTIONS>
+- 假設1
+- 假設2
+</ASSUMPTIONS>
+<CODE>
+完整 Python 原始碼
+</CODE>
+
+要求：
+1. code 必須是完整可執行的 Python。
+2. code 第一行必須是 import 或 from。
+3. 必須包含繼承 BaseStrategy 的 class。
+4. 必須實作 required_indicators、calculate_signals、generate_signals。
+5. generate_signals 必須回傳 DataFrame，至少包含 datetime 與 signal 欄位。
+6. 不要省略任何 method，不要用 ...、TODO、佔位文字。
+
+策略規格：
+- 名稱: {spec.name}
+- 描述: {spec.description}
+- 指標: {', '.join(spec.indicators)}
+- 進場規則: {spec.entry_rules}
+- 出場規則: {spec.exit_rules}
+- 參數: {spec.parameters}
+- 時間框架: {spec.timeframe}
+- 風險等級: {spec.risk_level}
+
+補充上下文：
+{context or '無'}
+
+上一輪代碼：
+{previous_code or '無'}
+
+上一輪 feedback：
+{feedback_text}
+"""
+
+    def _build_revision_prompt(
+        self,
+        spec: StrategySpec,
+        context: str,
+        feedback_text: str,
+        previous_code: str,
+    ) -> str:
+        """建立修補導向 prompt，避免每輪重寫整份 class。"""
+        return f"""你是一個 Python 策略修復工程師。
+
+你的任務不是重寫整份策略，而是基於現有代碼做最小必要修正，讓它通過驗證。
+請保留現有 class 名稱、參數名稱與主要策略邏輯，只修復 feedback 指出的問題。
+
+不要輸出 markdown，不要輸出額外說明，不要輸出 JSON。
+輸出格式必須完全如下：
+<SUMMARY>
+本輪修復摘要
+</SUMMARY>
+<ASSUMPTIONS>
+- 假設1
+</ASSUMPTIONS>
+<CODE>
+完整修正後的 Python 原始碼
+</CODE>
+
+硬性要求：
+1. 必須保留同一個 BaseStrategy 子類名稱：{spec.name}
+2. 必須提供完整 __init__
+3. 必須實作 required_indicators、calculate_signals、generate_signals
+4. 如果 feedback 提到 syntax error，先修語法，不要重構
+5. 如果 feedback 提到缺少 generate_signals，直接補上完整實作
+6. 不要輸出半截 method，不要輸出 ...、TODO、註解佔位
+7. generate_signals 必須回傳 DataFrame，至少包含 datetime 與 signal 欄位
+
+策略規格：
+- 名稱: {spec.name}
+- 描述: {spec.description}
+- 指標: {', '.join(spec.indicators)}
+- 參數: {spec.parameters}
+
+補充上下文：
+{context or '無'}
+
+上一輪完整代碼：
+{previous_code or '無'}
+
+必須修復的 feedback：
+{feedback_text}
+"""
+
+    def _parse_json_response(self, content: str) -> Dict[str, Any]:
+        """從模型回應中提取 JSON。"""
+        text = content.strip()
+        if "```json" in text:
+            text = text.split("```json", 1)[1].split("```", 1)[0]
+        elif "```" in text:
+            text = text.split("```", 1)[1].split("```", 1)[0]
+        return json.loads(text.strip())
+
+    def _parse_structured_response(self, content: str) -> Dict[str, Any]:
+        """從區塊標記回應中提取 summary / assumptions / code。"""
+        summary_match = re.search(r"<SUMMARY>\s*(.*?)\s*</SUMMARY>", content, flags=re.DOTALL)
+        assumptions_match = re.search(r"<ASSUMPTIONS>\s*(.*?)\s*</ASSUMPTIONS>", content, flags=re.DOTALL)
+        code_match = re.search(r"<CODE>\s*(.*?)\s*</CODE>", content, flags=re.DOTALL)
+
+        extracted_code = ""
+        if code_match:
+            extracted_code = code_match.group(1).strip()
+        else:
+            extracted_code = self._extract_python_code(content)
+            if not extracted_code:
+                raise ValueError("Missing <CODE> block in structured response")
+
+        assumptions = []
+        if assumptions_match:
+            for line in assumptions_match.group(1).splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                assumptions.append(line.lstrip("- ").strip())
+
+        return {
+            "summary": summary_match.group(1).strip() if summary_match else "",
+            "assumptions": assumptions,
+            "code": extracted_code,
+        }
+
+    def _clean_code_block(self, code: str) -> str:
+        """移除 markdown 與敘述雜訊，盡量保留可解析的 Python。"""
+        code = code.strip()
+        if code.startswith("```python"):
+            code = code[10:]
+        elif code.startswith("```"):
+            code = code[3:]
+        if code.endswith("```"):
+            code = code[:-3]
+        code = code.strip()
+
+        extracted = self._extract_python_code(code)
+        return extracted or code
+
+    def _extract_python_code(self, content: str) -> str:
+        """從混合文字中提取最可能的 Python 程式碼。"""
+        if not content:
+            return ""
+
+        candidates: List[str] = []
+        stripped = content.strip()
+        if stripped:
+            candidates.append(stripped)
+
+        fenced_blocks = re.findall(r"```(?:python)?\s*(.*?)```", content, flags=re.DOTALL)
+        candidates.extend(block.strip() for block in fenced_blocks if block.strip())
+
+        tag_match = re.search(r"<CODE>\s*(.*?)\s*(?:</CODE>|$)", content, flags=re.DOTALL)
+        if tag_match:
+            candidates.append(tag_match.group(1).strip())
+
+        lines = content.splitlines()
+        start_idx = None
+        for idx, line in enumerate(lines):
+            normalized = line.lstrip()
+            if normalized.startswith(("import ", "from ", "class ")):
+                start_idx = idx
+                break
+
+        if start_idx is not None:
+            code_lines = self._collect_code_lines(lines[start_idx:])
+            if code_lines:
+                candidates.append("\n".join(code_lines).strip())
+
+        seen = set()
+        for candidate in candidates:
+            if not candidate or candidate in seen:
+                continue
+            seen.add(candidate)
+            trimmed = self._trim_to_valid_python(candidate)
+            if trimmed:
+                return trimmed
+
+        return ""
+
+    def _collect_code_lines(self, lines: List[str]) -> List[str]:
+        """從混合輸出中收集看起來像 Python 的區塊。"""
+        collected: List[str] = []
+        started = False
+
+        for line in lines:
+            normalized = line.lstrip()
+
+            if not started and normalized.startswith(("import ", "from ", "class ")):
+                started = True
+
+            if not started:
+                continue
+
+            if self._looks_like_non_code_boundary(line):
+                break
+
+            collected.append(line)
+
+        while collected and not collected[-1].strip():
+            collected.pop()
+
+        return collected
+
+    def _looks_like_non_code_boundary(self, line: str) -> bool:
+        """判斷一行是否更像敘述文字而不是 Python。"""
+        stripped = line.strip()
+        normalized = line.lstrip()
+
+        if not stripped:
+            return False
+
+        if "HTTP Request:" in stripped:
+            return True
+
+        if stripped.startswith(("<SUMMARY>", "</SUMMARY>", "<ASSUMPTIONS>", "</ASSUMPTIONS>", "<CODE>", "</CODE>")):
+            return True
+
+        if re.match(r"^\d+\.\s", stripped):
+            return True
+
+        if re.match(r"^[-*]\s", stripped):
+            return True
+
+        if re.match(r"^[\u4e00-\u9fff]", stripped):
+            return True
+
+        if stripped.startswith(("```", "...", "*Implementation detail")):
+            return True
+
+        allowed_prefixes = (
+            "from ", "import ", "class ", "def ", "@", "#",
+            "if ", "elif ", "else", "for ", "while ", "try", "except", "finally",
+            "with ", "return", "pass", "break", "continue", "raise", "yield", "assert",
+            '"""', "'''", ")", "]", "}", ",",
+        )
+        if normalized.startswith(allowed_prefixes):
+            return False
+
+        if normalized.startswith((
+            "self.", "signals", "signal", "result", "data", "df", "df_", "bb_",
+            "position", "entry_price", "current_time", "stop_price",
+        )):
+            return False
+
+        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*\s*=", normalized):
+            return False
+
+        if line.startswith((" ", "\t")):
+            return False
+
+        return True
+
+    def _trim_to_valid_python(self, candidate: str) -> str:
+        """從候選內容尾端回退，找到可解析的 Python。"""
+        lines = candidate.splitlines()
+        for end in range(len(lines), 0, -1):
+            snippet = "\n".join(lines[:end]).strip()
+            if not snippet:
+                continue
+            try:
+                ast.parse(snippet)
+                return snippet
+            except SyntaxError:
+                continue
+
+        return ""
+
+    def _extract_strategy_context(self, md_context: Optional[str]) -> str:
+        """從策略 MD 中提取與生成程式碼直接相關的內容。"""
+        if not md_context:
+            return ""
+
+        sections = []
+
+        spec_match = re.search(
+            r"##\s*策略規格\s*(.*?)(?:\n##\s+|\Z)",
+            md_context,
+            flags=re.DOTALL,
+        )
+        if spec_match:
+            sections.append(spec_match.group(1).strip())
+
+        if not sections:
+            lines = []
+            for line in md_context.splitlines():
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                if stripped.startswith(("- 20", "20", "http", "## 生成檔案")):
+                    continue
+                if "HTTP Request:" in stripped or ".py" in stripped:
+                    continue
+                lines.append(stripped)
+            sections.append("\n".join(lines[:12]))
+
+        return "\n\n".join(section for section in sections if section).strip()
+
 
 # 便捷函數
 def create_strategy_developer(
@@ -440,5 +821,6 @@ def create_strategy_developer(
 __all__ = [
     "StrategyDeveloperAgent",
     "StrategySpec",
+    "EngineerCodeResult",
     "create_strategy_developer",
 ]

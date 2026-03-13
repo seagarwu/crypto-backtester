@@ -170,5 +170,80 @@ class TestMDContextPassing:
         assert 'md_context' in params
 
 
+class TestGeneratedStrategyCodeHandling:
+    """測試生成策略代碼的抽取、保存與載入。"""
+
+    @pytest.fixture
+    def conversation(self, tmp_path):
+        conv = ConversationalStrategyDeveloper()
+        conv.md_dir = tmp_path / "ideas"
+        conv._llm = MagicMock()
+        return conv
+
+    def test_extract_python_code_skips_non_code_preamble(self, conversation):
+        content = """
+這是策略說明：
+- 使用布林通道
+
+from strategies.base import BaseStrategy, SignalType
+import pandas as pd
+
+class DemoStrategy(BaseStrategy):
+    @property
+    def required_indicators(self) -> list:
+        return []
+
+    def calculate_signals(self, data: pd.DataFrame, indicators: dict) -> dict:
+        return {"signal": 0, "strength": 0.5}
+
+    def generate_signals(self, data: pd.DataFrame) -> pd.Series:
+        return pd.Series([SignalType.HOLD] * len(data), index=data.index)
+"""
+        extracted = conversation._extract_python_code(content)
+
+        assert extracted.startswith("from strategies.base")
+        assert "class DemoStrategy" in extracted
+
+    def test_extract_python_code_stops_before_trailing_narrative(self, conversation):
+        content = """
+from strategies.base import BaseStrategy, SignalType
+import pandas as pd
+
+class DemoStrategy(BaseStrategy):
+    @property
+    def required_indicators(self) -> list:
+        return []
+
+    def calculate_signals(self, data: pd.DataFrame, indicators: dict) -> dict:
+        return {"signal": SignalType.HOLD, "strength": 0.5}
+
+    def generate_signals(self, data: pd.DataFrame) -> pd.Series:
+        return pd.Series([SignalType.HOLD] * len(data), index=data.index)
+
+1. 這裡是額外說明，不是程式碼
+2. 也不應該被保留下來
+"""
+        extracted = conversation._extract_python_code(content)
+
+        assert "class DemoStrategy" in extracted
+        assert "這裡是額外說明" not in extracted
+
+    def test_save_strategy_code_returns_none_for_invalid_content(self, conversation):
+        saved = conversation._save_strategy_code(
+            "BrokenStrategy",
+            "({'open': 'first', 'high': 'max'})`.\n* Calculate BBands on df_4h.",
+        )
+
+        assert saved is None
+
+    def test_load_generated_strategy_returns_none_for_invalid_file(self, conversation, tmp_path):
+        bad_file = tmp_path / "broken_strategy.py"
+        bad_file.write_text('"""bad"""\nnot valid python ???\n', encoding="utf-8")
+
+        loaded = conversation._load_generated_strategy("BrokenStrategy", str(bad_file))
+
+        assert loaded is None
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

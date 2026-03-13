@@ -11,6 +11,8 @@ Conversational Strategy Developer - 對話式策略開發助手
 import os
 import sys
 import re
+import argparse
+import inspect
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 from datetime import datetime
@@ -36,6 +38,7 @@ from agents.strategy_evaluator_agent import (
     create_strategy_evaluator,
 )
 from agents.reporter_agent import ReporterAgent
+from agents.strategy_rd_workflow import StrategyRDWorkflow, RDConfig
 from reports import generate_backtest_report
 
 logger = logging.getLogger(__name__)
@@ -130,23 +133,35 @@ class MyStrategy(BaseStrategy):
 class ConversationalStrategyDeveloper:
     """對話式策略開發助手"""
     
-    def __init__(self, model: str = "gemini-3-flash-preview", temperature: float = 0.7):
+    def __init__(
+        self,
+        model: str = "gemini-3-flash-preview",
+        temperature: float = 0.7,
+        engineer_model: Optional[str] = None,
+        evaluator_model: Optional[str] = None,
+        reporter_model: Optional[str] = None,
+    ):
         # LLM 配置（懒加载）
         self._llm = None
         self._llm_config = {
             "model": model,
             "temperature": temperature,
         }
-        
-        self.developer = StrategyDeveloperAgent()
-        self.evaluator = create_strategy_evaluator()
+
+        self.engineer_model = engineer_model or model
+        self.evaluator_model = evaluator_model or model
+        self.reporter_model = reporter_model or model
+
+        self.developer = StrategyDeveloperAgent(model=self.engineer_model)
+        self.evaluator = create_strategy_evaluator(model=self.evaluator_model)
         self.runner = create_backtest_runner()
-        self.reporter = ReporterAgent()
+        self.reporter = ReporterAgent(model=self.reporter_model)
         
         # 對話歷史
         self.conversation_history: List[Dict[str, str]] = []
         self.current_strategy: Optional[StrategySpec] = None
         self.current_result: Optional["BacktestReport"] = None
+        self.current_report = None
         
         # 策略發想 MD 文件管理
         self.md_dir = Path(__file__).parent.parent / "strategies" / "ideas"
@@ -154,12 +169,135 @@ class ConversationalStrategyDeveloper:
         
         # 標記是否正在執行
         self.is_executing = False
+        self._last_strategy_class = None
         
         # 確保有過討論才能執行
         self._has_discussed = False  # 必須經過 LLM 回應一輪
     
-    def _save_strategy_code(self, strategy_name: str, code: str) -> str:
-        """保存生成的策略代碼到文件"""
+    def _extract_python_code(self, content: str) -> str:
+        """從 LLM 回應中提取可解析的 Python 程式碼。"""
+        import ast
+
+        if not content:
+            return ""
+
+        candidates = []
+
+        stripped = content.strip()
+        if stripped:
+            candidates.append(stripped)
+
+        fenced_blocks = re.findall(r"```(?:python)?\s*(.*?)```", content, flags=re.DOTALL)
+        candidates.extend(block.strip() for block in fenced_blocks if block.strip())
+
+        lines = content.splitlines()
+        start_idx = None
+        for idx, line in enumerate(lines):
+            normalized = line.lstrip()
+            if normalized.startswith(("import ", "from ", "class ")):
+                start_idx = idx
+                break
+
+        if start_idx is not None:
+            code_lines = self._collect_code_lines(lines[start_idx:])
+            if code_lines:
+                candidates.append("\n".join(code_lines).strip())
+
+        seen = set()
+        for candidate in candidates:
+            if not candidate or candidate in seen:
+                continue
+            seen.add(candidate)
+            trimmed = self._trim_to_valid_python(candidate)
+            if trimmed:
+                return trimmed
+
+        return stripped
+
+    def _collect_code_lines(self, lines: List[str]) -> List[str]:
+        """從混合輸出中收集看起來像 Python 的程式碼區塊。"""
+        collected: List[str] = []
+        started = False
+
+        for line in lines:
+            stripped = line.strip()
+            normalized = line.lstrip()
+
+            if not started and normalized.startswith(("import ", "from ", "class ")):
+                started = True
+
+            if not started:
+                continue
+
+            if self._looks_like_non_code_boundary(line):
+                break
+
+            collected.append(line)
+
+        while collected and not collected[-1].strip():
+            collected.pop()
+
+        return collected
+
+    def _looks_like_non_code_boundary(self, line: str) -> bool:
+        """判斷一行是否更像是敘述文字而不是 Python 程式碼。"""
+        stripped = line.strip()
+        normalized = line.lstrip()
+
+        if not stripped:
+            return False
+
+        if "HTTP Request:" in stripped:
+            return True
+
+        if re.match(r"^\d+\.\s", stripped):
+            return True
+
+        if re.match(r"^[-*]\s", stripped):
+            return True
+
+        if re.match(r"^[\u4e00-\u9fff]", stripped):
+            return True
+
+        allowed_prefixes = (
+            "from ", "import ", "class ", "def ", "@", "#",
+            "if ", "elif ", "else", "for ", "while ", "try", "except", "finally",
+            "with ", "return", "pass", "break", "continue", "raise", "yield", "assert",
+            '"""', "'''", ")", "]", "}", ",",
+        )
+        if normalized.startswith(allowed_prefixes):
+            return False
+
+        if normalized.startswith(("self.", "signals", "signal", "result", "data", "df_", "bb_")):
+            return False
+
+        if re.match(r"^[A-Za-z_][A-Za-z0-9_]*\s*=", normalized):
+            return False
+
+        if line.startswith((" ", "\t")):
+            return False
+
+        return True
+
+    def _trim_to_valid_python(self, candidate: str) -> str:
+        """從候選內容尾端回退，找到可解析的 Python 程式碼。"""
+        import ast
+
+        lines = candidate.splitlines()
+        for end in range(len(lines), 0, -1):
+            snippet = "\n".join(lines[:end]).strip()
+            if not snippet:
+                continue
+            try:
+                ast.parse(snippet)
+                return snippet
+            except SyntaxError:
+                continue
+
+        return ""
+
+    def _save_strategy_code(self, strategy_name: str, code: str) -> Optional[str]:
+        """保存生成的策略代碼到文件。"""
         import re
         import ast
         
@@ -181,10 +319,15 @@ class ConversationalStrategyDeveloper:
 """
 '''
         
+        code = self._extract_python_code(code)
+
         # 驗證代碼語法
         full_code = header + code
         try:
             ast.parse(full_code)
+            if not self._is_valid_strategy_code(full_code):
+                print("   ❌ 代碼雖可解析，但缺少有效的策略類別或核心方法")
+                return None
             print("   ✅ 代碼語法驗證通過")
         except SyntaxError as e:
             print(f"   ⚠️ 代碼語法有誤: {e}")
@@ -245,6 +388,9 @@ class ConversationalStrategyDeveloper:
             
             try:
                 ast.parse(full_code)
+                if not self._is_valid_strategy_code(full_code):
+                    print("   ❌ 修復後仍缺少有效的策略類別或核心方法")
+                    return None
                 print("   ✅ 代碼已修復並通過驗證")
             except SyntaxError as e2:
                 print(f"   ❌ 無法修復語法錯誤: {e2}")
@@ -269,14 +415,168 @@ class ConversationalStrategyDeveloper:
                     except:
                         pass
                 
-                # 仍然保存，但會在載入時失敗
-                print("   💾 仍保存檔案，載入時會使用回退策略")
+                print("   ❌ 代碼仍無法修復，放棄保存生成檔案")
+                return None
         
         # 寫入文件
         with open(filename, 'w', encoding='utf-8') as f:
             f.write(full_code)
         
         return str(filename)
+
+    def _should_use_local_template(self, spec: "StrategySpec") -> bool:
+        """判斷是否應優先使用本地模板生成策略。"""
+        indicators = {indicator.lower() for indicator in (spec.indicators or [])}
+        params = spec.parameters or {}
+        return (
+            "bband" in indicators
+            and "higher_timeframe" in params
+            and "entry_timeframe" in params
+        )
+
+    def _generate_local_template_strategy(self, spec: "StrategySpec") -> str:
+        """使用本地模板生成穩定的策略程式碼。"""
+        class_name = re.sub(r'[^a-zA-Z0-9_]', '', spec.name.title().replace(" ", "")) or "GeneratedStrategy"
+        if not class_name.endswith("Strategy"):
+            class_name += "Strategy"
+
+        params = spec.parameters or {}
+        bb_period = int(params.get("bb_period", 20))
+        bb_std = float(params.get("bb_std", 2.0))
+        volume_ma_period = int(params.get("volume_ma_period", 20))
+        volume_multiplier = float(params.get("volume_multiplier", 2.0))
+        stop_loss_pct = float(params.get("stop_loss_pct", 0.03))
+        higher_timeframe = str(params.get("higher_timeframe", "4h"))
+        entry_timeframe = str(params.get("entry_timeframe", spec.timeframe or "1h"))
+        strategy_name = spec.name.replace('"', '\\"')
+
+        return f'''from strategies.base import BaseStrategy, SignalType
+import pandas as pd
+import numpy as np
+
+
+class {class_name}(BaseStrategy):
+    """Local template strategy generated from strategy spec.
+
+    Note:
+        The current backtest engine is long-only. This template implements the
+        long setup of the multi-timeframe BBand strategy and exits on upper band
+        touch or fixed stop loss.
+    """
+
+    def __init__(
+        self,
+        bb_period: int = {bb_period},
+        bb_std: float = {bb_std},
+        volume_ma_period: int = {volume_ma_period},
+        volume_multiplier: float = {volume_multiplier},
+        stop_loss_pct: float = {stop_loss_pct},
+        higher_timeframe: str = "{higher_timeframe}",
+        entry_timeframe: str = "{entry_timeframe}",
+        name: str = "{strategy_name}",
+    ):
+        super().__init__(name=name)
+        self.bb_period = bb_period
+        self.bb_std = bb_std
+        self.volume_ma_period = volume_ma_period
+        self.volume_multiplier = volume_multiplier
+        self.stop_loss_pct = stop_loss_pct
+        self.higher_timeframe = higher_timeframe
+        self.entry_timeframe = entry_timeframe
+        self.required_indicators = [
+            f"BBand_{{bb_period}}_{{bb_std}}",
+            f"Volume_MA_{{volume_ma_period}}",
+        ]
+
+    def calculate_signals(self, data: pd.DataFrame, indicators: dict) -> dict:
+        row = data.iloc[-1]
+        long_setup = bool(row.get("higher_long_setup", False))
+        touch_lower = bool(row.get("touch_lower", False))
+        touch_upper = bool(row.get("touch_upper", False))
+        volume_ok = bool(row.get("volume_ok", False))
+        in_position = bool(row.get("in_position", False))
+        stop_loss_hit = bool(row.get("stop_loss_hit", False))
+
+        if in_position and (touch_upper or stop_loss_hit):
+            return {{"signal": SignalType.SELL, "strength": 1.0}}
+        if (not in_position) and long_setup and touch_lower and volume_ok:
+            return {{"signal": SignalType.BUY, "strength": 1.0}}
+        return {{"signal": SignalType.HOLD, "strength": 0.0}}
+
+    def _calc_bbands(self, df: pd.DataFrame) -> pd.DataFrame:
+        df = df.copy()
+        df["bb_middle"] = df["close"].rolling(window=self.bb_period).mean()
+        rolling_std = df["close"].rolling(window=self.bb_period).std()
+        df["bb_upper"] = df["bb_middle"] + (rolling_std * self.bb_std)
+        df["bb_lower"] = df["bb_middle"] - (rolling_std * self.bb_std)
+        return df
+
+    def generate_signals(self, data: pd.DataFrame) -> pd.DataFrame:
+        df = data.copy()
+        df["datetime"] = pd.to_datetime(df["datetime"])
+        df = df.sort_values("datetime").reset_index(drop=True)
+
+        higher_df = (
+            df.set_index("datetime")
+            .resample(self.higher_timeframe)
+            .agg({{
+                "open": "first",
+                "high": "max",
+                "low": "min",
+                "close": "last",
+                "volume": "sum",
+            }})
+            .dropna()
+            .reset_index()
+        )
+        higher_df = self._calc_bbands(higher_df)
+        higher_df["higher_long_setup"] = higher_df["low"] <= higher_df["bb_lower"]
+        higher_df = higher_df[["datetime", "higher_long_setup"]]
+
+        df = self._calc_bbands(df)
+        df["volume_ma"] = df["volume"].rolling(window=self.volume_ma_period).mean()
+        df["volume_ok"] = df["volume"] >= (df["volume_ma"] * self.volume_multiplier)
+        df["touch_lower"] = df["low"] <= df["bb_lower"]
+        df["touch_upper"] = df["high"] >= df["bb_upper"]
+
+        df = pd.merge_asof(
+            df.sort_values("datetime"),
+            higher_df.sort_values("datetime"),
+            on="datetime",
+            direction="backward",
+        )
+        df["higher_long_setup"] = df["higher_long_setup"].fillna(False)
+        df["signal"] = SignalType.HOLD
+        df["in_position"] = False
+        df["stop_loss_hit"] = False
+
+        in_position = False
+        entry_price = np.nan
+
+        for i in range(len(df)):
+            if pd.isna(df.loc[i, "bb_lower"]) or pd.isna(df.loc[i, "bb_upper"]) or pd.isna(df.loc[i, "volume_ma"]):
+                continue
+
+            stop_loss_hit = False
+            if in_position:
+                stop_price = entry_price * (1 - self.stop_loss_pct)
+                stop_loss_hit = df.loc[i, "low"] <= stop_price
+
+            df.loc[i, "in_position"] = in_position
+            df.loc[i, "stop_loss_hit"] = stop_loss_hit
+
+            result = self.calculate_signals(df.iloc[: i + 1], {{}})
+            df.loc[i, "signal"] = result["signal"]
+
+            if result["signal"] == SignalType.BUY:
+                in_position = True
+                entry_price = df.loc[i, "close"]
+            elif result["signal"] == SignalType.SELL:
+                in_position = False
+                entry_price = np.nan
+
+        return df[["datetime", "open", "high", "low", "close", "volume", "signal"]]
+'''
     
     # ========================================
     # 策略發想 MD 文件管理
@@ -534,8 +834,90 @@ class ConversationalStrategyDeveloper:
             line = re.sub(r'^```$', '', line)
             fixed_lines.append(line)
         code = '\n'.join(fixed_lines)
-        
+
         return code
+
+    def _is_valid_strategy_code(self, code: str) -> bool:
+        """檢查內容是否為可載入的策略程式碼。"""
+        import ast
+
+        try:
+            tree = ast.parse(code)
+        except SyntaxError:
+            return False
+
+        for node in tree.body:
+            if not isinstance(node, ast.ClassDef):
+                continue
+
+            method_names = {
+                child.name
+                for child in node.body
+                if isinstance(child, ast.FunctionDef)
+            }
+            if "generate_signals" in method_names or "calculate_signals" in method_names:
+                return True
+
+        return False
+
+    def _instantiate_strategy(self, strategy_class, parameters: Dict[str, Any]):
+        """根據策略類別的 __init__ 簽名安全地建立實例。"""
+        parameters = parameters or {}
+
+        try:
+            init_sig = inspect.signature(strategy_class.__init__)
+        except (TypeError, ValueError):
+            init_sig = None
+
+        if init_sig is None:
+            return strategy_class(**parameters)
+
+        accepted_params = {}
+        accepts_var_kwargs = False
+
+        for name, param in init_sig.parameters.items():
+            if name == "self":
+                continue
+            if param.kind == inspect.Parameter.VAR_KEYWORD:
+                accepts_var_kwargs = True
+                break
+            if param.kind in (
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.KEYWORD_ONLY,
+            ) and name in parameters:
+                accepted_params[name] = parameters[name]
+
+        if accepts_var_kwargs:
+            accepted_params = dict(parameters)
+
+        ignored_params = {
+            key: value for key, value in parameters.items()
+            if key not in accepted_params
+        }
+        if ignored_params:
+            print(f"   ⚠️ 忽略不支援的策略參數: {ignored_params}")
+
+        return strategy_class(**accepted_params)
+
+    def _extract_symbol_from_spec(self, spec: "StrategySpec") -> str:
+        """從策略規格或檔名中提取交易對。"""
+        candidates = []
+
+        if spec and spec.name:
+            candidates.append(spec.name)
+        if self.current_md_path:
+            candidates.append(self.current_md_path.stem)
+
+        for candidate in candidates:
+            match = re.search(r"\b([A-Z]{2,10}USDT)\b", candidate.upper())
+            if match:
+                return match.group(1)
+
+            match = re.search(r"([A-Z]{2,10}_?USDT)", candidate.upper())
+            if match:
+                return match.group(1).replace("_", "")
+
+        return "BTCUSDT"
     
     def _load_generated_strategy(self, strategy_name: str, filepath: str):
         """動態加載生成的策略類別"""
@@ -554,7 +936,10 @@ class ConversationalStrategyDeveloper:
             except SyntaxError as e:
                 print(f"   ⚠️ 文件語法有誤，嘗試修復: {e}")
                 code = self._fix_syntax_errors(code)
-                
+                if not self._is_valid_strategy_code(code):
+                    print("   ❌ 修復後仍不是有效的策略程式碼")
+                    return None
+
                 # 寫回修復後的代碼
                 with open(filepath, 'w', encoding='utf-8') as f:
                     f.write(code)
@@ -582,16 +967,30 @@ class ConversationalStrategyDeveloper:
                         break
                 
                 if original_class is None:
+                    print("   ⚠️ 生成檔案中找不到 BaseStrategy 子類，回退到現有策略")
                     return None
                 
-                # 檢查是否有 generate_signals 方法（不是從父類繼承的）
+                # 檢查必要方法
                 has_own_generate = 'generate_signals' in original_class.__dict__
+                has_own_calculate = 'calculate_signals' in original_class.__dict__
+                has_own_required = 'required_indicators' in original_class.__dict__
+
+                if not has_own_generate and not has_own_calculate:
+                    print("   ⚠️ 生成策略缺少核心方法，回退到現有策略")
+                    return None
                 
                 if not has_own_generate:
                     print(f"   ⚠️ 缺少 generate_signals，添加默認實現")
                     
                     # 動態創建新類，繼承原始類並實現 generate_signals
                     def default_generate_signals(self, data):
+                        if hasattr(self, "calculate_signals"):
+                            signals = []
+                            for i in range(len(data)):
+                                row_data = data.iloc[: i + 1]
+                                result = self.calculate_signals(row_data, {})
+                                signals.append(result.get("signal", SignalType.HOLD))
+                            return pd.Series(signals, index=data.index)
                         signals = [SignalType.HOLD] * len(data)
                         return pd.Series(signals, index=data.index)
                     
@@ -601,6 +1000,9 @@ class ConversationalStrategyDeveloper:
                         (original_class,),
                         {'generate_signals': default_generate_signals}
                     )
+
+                    if not has_own_required:
+                        NewClass.required_indicators = property(lambda self: [])
                     return NewClass
                 
                 return original_class
@@ -609,6 +1011,12 @@ class ConversationalStrategyDeveloper:
         except Exception as e:
             logger.error(f"加載策略失敗: {e}")
             return None
+
+    def _generated_strategy_path(self, strategy_name: str) -> Path:
+        """取得生成策略檔案路徑。"""
+        safe_name = re.sub(r'[^a-zA-Z0-9_]', '_', strategy_name)
+        safe_name = re.sub(r'_+', '_', safe_name).strip('_')
+        return Path(__file__).parent.parent / "strategies" / "generated" / f"{safe_name}.py"
     
     @property
     def llm(self):
@@ -749,7 +1157,10 @@ class ConversationalStrategyDeveloper:
 ║  • help - 顯示幫助                                           ║
 ╚══════════════════════════════════════════════════════════════╝
 """)
-    
+        print(f"   對話模型: {self._llm_config['model']}")
+        print(f"   Engineer 模型: {self.engineer_model}")
+        print(f"   Evaluator 模型: {self.evaluator_model}")
+        print(f"   Reporter 模型: {self.reporter_model}")
     def parse_user_intent(self, message: str) -> Dict[str, Any]:
         """解析用戶意圖"""
         message = message.lower()
@@ -1073,6 +1484,8 @@ class ConversationalStrategyDeveloper:
                 if not strategy_name:
                     strategy_name = "未命名策略"
                 self._create_strategy_md(strategy_name)
+            else:
+                self.current_strategy = spec
         
         # 顯示當前 MD 內容（如果有）
         if self.current_md_path:
@@ -1178,7 +1591,7 @@ class ConversationalStrategyDeveloper:
             except EOFError:
                 break
 
-    def _run_optimization(self, spec, price_df, data_path):
+    def _run_optimization(self, spec, price_df, data_path, strategy_class=None):
         """執行 Optuna 參數優化"""
         try:
             from strategies import BBandStrategy, MACrossoverStrategy
@@ -1186,8 +1599,39 @@ class ConversationalStrategyDeveloper:
             from backtest.engine import BacktestEngine
             from metrics import calculate_metrics
             
-            # 根據策略類型選擇
-            if "BBand" in spec.indicators:
+            # 根據當前實際使用的策略類型選擇
+            if strategy_class is None:
+                if "BBand" in spec.indicators:
+                    strategy_class = BBandStrategy
+                else:
+                    strategy_class = MACrossoverStrategy
+
+            if (
+                strategy_class is MACrossoverStrategy
+                and spec.parameters
+                and "higher_timeframe" in spec.parameters
+                and "entry_timeframe" in spec.parameters
+            ):
+                generated_path = self._generated_strategy_path(spec.name)
+                if generated_path.exists():
+                    loaded_class = self._load_generated_strategy(spec.name, str(generated_path))
+                    if loaded_class is not None:
+                        strategy_class = loaded_class
+
+            strategy_name = getattr(strategy_class, "__name__", "")
+            if strategy_name == "Btcusdt_MaStrategy" or (
+                spec.parameters
+                and "higher_timeframe" in spec.parameters
+                and "entry_timeframe" in spec.parameters
+            ):
+                param_space = {
+                    "bb_period": {"low": 10, "high": 40, "type": "int"},
+                    "bb_std": {"low": 1.5, "high": 3.0, "type": "float"},
+                    "volume_ma_period": {"low": 10, "high": 40, "type": "int"},
+                    "volume_multiplier": {"low": 1.2, "high": 3.0, "type": "float"},
+                    "stop_loss_pct": {"low": 0.01, "high": 0.05, "type": "float"},
+                }
+            elif "BBand" in spec.indicators or strategy_class is BBandStrategy:
                 strategy_class = BBandStrategy
                 param_space = {
                     "bband_period": {"low": 10, "high": 60, "type": "int"},
@@ -1272,7 +1716,7 @@ class ConversationalStrategyDeveloper:
         try:
             # 使用 spec 中已有的信息，而不是重新解析
             interval = spec.timeframe or "1h"
-            symbol = spec.name.split()[0] if spec.name else "BTCUSDT"  # 從名稱提取交易對
+            symbol = self._extract_symbol_from_spec(spec)
             
             # 嘗試載入數據 - 支援多個可能路徑
             project_root = Path(__file__).parent.parent
@@ -1328,83 +1772,126 @@ class ConversationalStrategyDeveloper:
             if generate_code == "y":
                 print("""
 ╔══════════════════════════════════════════════════════════╗
-║              💻 Engineer Agent 生成策略代碼            ║
+║          🔁 Agentic Strategy R&D Loop 啟動             ║
 ╚══════════════════════════════════════════════════════════╝
 """)
-                
-                # 獲取 MD 上下文
+
                 md_context = None
                 if self.current_md_path:
                     md_context = self.current_md_path.read_text(encoding='utf-8')
-                
-                # 生成策略代碼（傳入 MD 上下文）
-                strategy_code = self.developer.generate_strategy_code(spec, md_context=md_context)
-                
-                if strategy_code:
-                    # 保存代碼到文件
-                    strategy_filename = self._save_strategy_code(spec.name, strategy_code)
-                    print(f"   ✅ 代碼已生成並保存到: {strategy_filename}")
-                    
-                    # 更新 MD 文件
-                    self._update_strategy_md(spec=spec, generated_file=strategy_filename)
-                    
-                    # 動態加載策略
-                    strategy_class = self._load_generated_strategy(spec.name, strategy_filename)
-                    
-                    if strategy_class:
-                        print(f"   ✅ 策略加載成功: {strategy_class.__name__}")
-                    else:
-                        print("   ⚠️ 代碼加載失敗，回退到現有策略")
-                        strategy_class = None
+
+                workflow = StrategyRDWorkflow(
+                    RDConfig(
+                        symbol=symbol,
+                        interval=interval,
+                        initial_capital=10000.0,
+                        data_dir=str(project_root / "data"),
+                        report_dir="reports",
+                        max_iterations=3,
+                    )
+                )
+                report = workflow.run(
+                    market_analysis=user_input or f"{symbol} {interval}",
+                    initial_strategy=spec,
+                    md_context=md_context,
+                )
+
+                self.current_strategy = workflow.current_strategy or spec
+                self.current_report = report
+
+                if workflow.iterations:
+                    last_iteration = workflow.iterations[-1]
+                    self.current_result = last_iteration.get("backtest_report")
+                    validated_path = workflow.current_validated_code_path
+                    if validated_path:
+                        strategy_class = workflow._load_strategy_class(validated_path)
+                        self._last_strategy_class = strategy_class
+
+                if report:
+                    print(workflow.reporter.format_report_compact(report))
+
+                    if workflow.current_validated_code_path:
+                        print(f"   🧾 最後一輪代碼: {workflow.current_validated_code_path}")
+                        self._update_strategy_md(
+                            spec=self.current_strategy,
+                            generated_file=workflow.current_validated_code_path,
+                        )
                 else:
-                    print("   ⚠️ 代碼生成失敗，回退到現有策略")
+                    print("   ⚠️ Agentic loop 未產出報告，回退到現有策略")
+                    if workflow.iterations:
+                        last_validation = workflow.iterations[-1].get("validation")
+                        if last_validation and getattr(last_validation, "issues", None):
+                            print("   🔎 最後一輪驗證失敗原因:")
+                            for issue in last_validation.issues[:5]:
+                                print(f"      - {issue}")
             
             # ========================================
             # 步驟 2: 如果沒有生成新代碼，使用現有策略
             # ========================================
             if strategy_class is None:
-                from strategies import BBandStrategy, MACrossoverStrategy
+                generated_path = self._generated_strategy_path(spec.name)
+                if generated_path.exists():
+                    print(f"   📦 載入既有生成策略: {generated_path}")
+                    strategy_class = self._load_generated_strategy(spec.name, str(generated_path))
+
+            if strategy_class is None:
+                from strategies import BBandStrategy, MACrossoverStrategy, MultiTimeframeBBandStrategy
                 
                 # 根據策略類型選擇現有策略
-                if "BBand" in spec.indicators:
+                if (
+                    "BBand" in spec.indicators
+                    and spec.parameters
+                    and "higher_timeframe" in spec.parameters
+                    and "entry_timeframe" in spec.parameters
+                ):
+                    strategy_class = MultiTimeframeBBandStrategy
+                elif "BBand" in spec.indicators:
                     strategy_class = BBandStrategy
                 else:
                     strategy_class = MACrossoverStrategy
             
-            # 執行回測 - 直接使用 engine
-            from backtest.engine import BacktestEngine
-            
-            # 創建策略
-            strategy = strategy_class(**spec.parameters)
-            
-            # 生成信號
-            print(f"   ⚙️ 策略: {strategy_class.__name__}")
-            print(f"   📐 參數: {spec.parameters}")
-            signals = strategy.generate_signals(price_df)
-            
-            # 執行回測
-            config = BacktestConfig(
-                symbol=symbol,
-                interval=interval,
-            )
-            engine = BacktestEngine(
-                initial_capital=config.initial_capital,
-                commission_rate=config.commission_rate,
-                position_size=config.position_size,
-            )
-            backtest_result = engine.run(price_df, signals)
-            self.current_result = backtest_result
-            
-            # 計算績效指標
-            from metrics import calculate_metrics
-            metrics = calculate_metrics(backtest_result)
-            
-            # 評估
-            print("   📈 評估策略...")
-            evaluation = self.evaluator.evaluate(backtest_result, metrics)
-            
-            # 顯示結果
-            print(f"""
+            # 如果已由 workflow 執行完整回測，直接進入後續選項
+            if self.current_report and self.current_result is not None and generate_code == "y":
+                backtest_result = self.current_result
+                from metrics import calculate_metrics
+                metrics = calculate_metrics(backtest_result)
+                evaluation = self.evaluator.evaluate(backtest_result, metrics)
+            else:
+                # 執行回測 - 直接使用 engine
+                from backtest.engine import BacktestEngine
+                
+                # 創建策略
+                strategy = self._instantiate_strategy(strategy_class, spec.parameters)
+                self._last_strategy_class = strategy_class
+                
+                # 生成信號
+                print(f"   ⚙️ 策略: {strategy_class.__name__}")
+                print(f"   📐 參數: {spec.parameters}")
+                signals = strategy.generate_signals(price_df)
+                
+                # 執行回測
+                config = BacktestConfig(
+                    symbol=symbol,
+                    interval=interval,
+                )
+                engine = BacktestEngine(
+                    initial_capital=config.initial_capital,
+                    commission_rate=config.commission_rate,
+                    position_size=config.position_size,
+                )
+                backtest_result = engine.run(price_df, signals)
+                self.current_result = backtest_result
+                
+                # 計算績效指標
+                from metrics import calculate_metrics
+                metrics = calculate_metrics(backtest_result)
+                
+                # 評估
+                print("   📈 評估策略...")
+                evaluation = self.evaluator.evaluate(backtest_result, metrics)
+
+                # 顯示結果
+                print(f"""
 ╔══════════════════════════════════════════════════════════╗
 ║                    📊 回測結果                           ║
 ╠══════════════════════════════════════════════════════════╣
@@ -1457,7 +1944,12 @@ class ConversationalStrategyDeveloper:
             do_optimize = input("   > ").strip().lower()
             
             if do_optimize == "y":
-                self._run_optimization(spec, price_df, data_path)
+                self._run_optimization(
+                    spec,
+                    price_df,
+                    data_path,
+                    self._last_strategy_class or strategy_class,
+                )
             
             # 詢問是否繼續
             print("""
@@ -1480,8 +1972,47 @@ class ConversationalStrategyDeveloper:
 
 def main():
     """主入口"""
-    developer = ConversationalStrategyDeveloper()
+    args = parse_args()
+    developer = ConversationalStrategyDeveloper(
+        model=args.model,
+        temperature=args.temperature,
+        engineer_model=args.engineer_model,
+        evaluator_model=args.evaluator_model,
+        reporter_model=args.reporter_model,
+    )
     developer.run_interactive()
+
+
+def parse_args():
+    """解析命令列參數。"""
+    parser = argparse.ArgumentParser(description="對話式策略開發助手")
+    parser.add_argument(
+        "--model",
+        default=os.environ.get("CONVERSATION_MODEL", "gemini-3-flash-preview"),
+        help="對話 agent 使用的模型，可用 CONVERSATION_MODEL 覆蓋",
+    )
+    parser.add_argument(
+        "--engineer-model",
+        default=os.environ.get("ENGINEER_MODEL"),
+        help="Engineer Agent 使用的模型，可用 ENGINEER_MODEL 覆蓋",
+    )
+    parser.add_argument(
+        "--evaluator-model",
+        default=os.environ.get("EVALUATOR_MODEL"),
+        help="Strategy Evaluator 使用的模型，可用 EVALUATOR_MODEL 覆蓋",
+    )
+    parser.add_argument(
+        "--reporter-model",
+        default=os.environ.get("REPORTER_MODEL"),
+        help="Reporter Agent 使用的模型，可用 REPORTER_MODEL 覆蓋",
+    )
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=float(os.environ.get("CONVERSATION_TEMPERATURE", "0.7")),
+        help="對話 agent temperature，可用 CONVERSATION_TEMPERATURE 覆蓋",
+    )
+    return parser.parse_args()
 
 
 if __name__ == "__main__":

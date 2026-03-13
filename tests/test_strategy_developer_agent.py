@@ -88,6 +88,104 @@ class TestStrategyDeveloperAgent:
         assert "最大回撤過大" in diagnosis
         assert "交易次數過少" in diagnosis
 
+    def test_extract_strategy_context_prefers_strategy_spec_section(self):
+        agent = StrategyDeveloperAgent()
+
+        md_context = """# Test
+
+## 討論歷史
+- 2026-03-12 18:21: 用戶: "好"
+- 18:21:32 | INFO | httpx | HTTP Request: POST ...
+
+## 策略規格
+- 名稱: BTCUSDT_BBand_Reversion
+- 描述: 測試策略
+- 指標: ['BBAND']
+
+## 生成檔案
+- /tmp/generated.py
+"""
+
+        context = agent._extract_strategy_context(md_context)
+
+        assert "名稱: BTCUSDT_BBand_Reversion" in context
+        assert "HTTP Request" not in context
+        assert "/tmp/generated.py" not in context
+
+    def test_parse_json_response_and_clean_code_block(self):
+        agent = StrategyDeveloperAgent()
+        raw = """```json
+{
+  "summary": "test",
+  "assumptions": ["a1"],
+  "code": "```python\\nfrom x import y\\n```"
+}
+```"""
+
+        data = agent._parse_json_response(raw)
+        code = agent._clean_code_block(data["code"])
+
+        assert data["summary"] == "test"
+        assert data["assumptions"] == ["a1"]
+        assert code == "from x import y"
+
+    def test_parse_structured_response(self):
+        agent = StrategyDeveloperAgent()
+        raw = """<SUMMARY>
+refine entry logic
+</SUMMARY>
+<ASSUMPTIONS>
+- use close price
+- long only
+</ASSUMPTIONS>
+<CODE>
+from x import y
+</CODE>"""
+
+        data = agent._parse_structured_response(raw)
+
+        assert data["summary"] == "refine entry logic"
+        assert data["assumptions"] == ["use close price", "long only"]
+        assert data["code"] == "from x import y"
+
+    def test_parse_structured_response_falls_back_to_python_extraction(self):
+        agent = StrategyDeveloperAgent()
+        raw = """這是策略實作說明
+
+```python
+from strategies.base import BaseStrategy
+
+class DemoStrategy(BaseStrategy):
+    pass
+```
+
+補充說明結束
+"""
+
+        data = agent._parse_structured_response(raw)
+
+        assert "class DemoStrategy" in data["code"]
+        assert data["summary"] == ""
+
+    def test_clean_code_block_strips_markdown_noise(self):
+        agent = StrategyDeveloperAgent()
+        raw = """說明文字
+
+```python
+from strategies.base import BaseStrategy
+
+class DemoStrategy(BaseStrategy):
+    pass
+```
+
+- 額外說明
+"""
+
+        code = agent._clean_code_block(raw)
+
+        assert code.startswith("from strategies.base import BaseStrategy")
+        assert code.endswith("pass")
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

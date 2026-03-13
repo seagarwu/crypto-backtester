@@ -20,11 +20,19 @@ from typing import Dict, Any, List, Optional
 from dataclasses import dataclass, field
 from datetime import datetime
 import logging
+from pathlib import Path
+import ast
+import importlib.util
+import inspect
 
 # 確保可以匯入模組
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from agents.strategy_developer_agent import StrategyDeveloperAgent, StrategySpec
+from agents.strategy_developer_agent import (
+    StrategyDeveloperAgent,
+    StrategySpec,
+    EngineerCodeResult,
+)
 from agents.backtest_runner_agent import (
     BacktestRunnerAgent, 
     BacktestConfig, 
@@ -73,6 +81,25 @@ class RDConfig:
     report_dir: str = "reports"
 
 
+@dataclass
+class CodeValidationResult:
+    """生成代碼的驗證結果。"""
+    passed: bool
+    filepath: str = ""
+    class_name: str = ""
+    issues: List[str] = field(default_factory=list)
+    smoke_metrics: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class IterationFeedback:
+    """提供給 Engineer Agent 的結構化 feedback。"""
+    bugs: List[str] = field(default_factory=list)
+    performance_issues: List[str] = field(default_factory=list)
+    required_changes: List[str] = field(default_factory=list)
+    validation_issues: List[str] = field(default_factory=list)
+
+
 class StrategyRDWorkflow:
     """
     策略研發閉環
@@ -108,12 +135,17 @@ class StrategyRDWorkflow:
         # 當前策略
         self.current_strategy: Optional[StrategySpec] = None
         self.current_report: Optional[StrategyReport] = None
+        self.current_code: str = ""
+        self.current_code_path: str = ""
+        self.current_validated_code_path: str = ""
     
     def run(
         self,
         market_analysis: str = None,
         existing_strategies: List[str] = None,
         target_metrics: Dict[str, float] = None,
+        initial_strategy: Optional[StrategySpec] = None,
+        md_context: str = None,
     ) -> StrategyReport:
         """
         執行策略研發閉環
@@ -130,14 +162,19 @@ class StrategyRDWorkflow:
         logger.info("🚀 開始策略研發閉環")
         logger.info("=" * 60)
         
-        # 第一次迭代
+        artifact_dir = Path(self.config.report_dir) / "iterations"
+        artifact_dir.mkdir(parents=True, exist_ok=True)
+
         for iteration in range(1, self.config.max_iterations + 1):
             logger.info(f"\n{'='*60}")
             logger.info(f"📊 迭代 {iteration}/{self.config.max_iterations}")
             logger.info(f"{'='*60}")
             
-            # 1. 開發策略
-            if iteration == 1:
+            # 1. 開發/更新策略規格
+            if iteration == 1 and initial_strategy is not None:
+                logger.info("\n[1/4] 使用現有策略規格...")
+                strategy = initial_strategy
+            elif iteration == 1:
                 logger.info("\n[1/4] 開發新策略...")
                 strategy = self.developer.develop_strategy(
                     market_analysis=market_analysis or "比特幣呈現上漲趨勢",
@@ -145,19 +182,78 @@ class StrategyRDWorkflow:
                     target_metrics=target_metrics,
                 )
             else:
-                logger.info(f"\n[1/4] 根據回測結果優化策略...")
-                last_results = self.iterations[-1]['backtest_report']
-                strategy = self.developer.optimize_strategy(
-                    self.current_strategy,
-                    last_results,
-                )
+                last_results = self.iterations[-1].get('backtest_report')
+                if last_results is not None:
+                    logger.info(f"\n[1/4] 根據回測結果優化策略...")
+                    strategy = self.developer.optimize_strategy(
+                        self.current_strategy,
+                        last_results,
+                    )
+                else:
+                    logger.info(f"\n[1/4] 保持策略規格，專注修正策略代碼...")
+                    strategy = self.current_strategy
             
             self.current_strategy = strategy
             logger.info(f"   策略: {strategy.name}")
             logger.info(f"   指標: {', '.join(strategy.indicators)}")
-            
-            # 2. 回測
-            logger.info("\n[2/4] 執行回測...")
+
+            feedback = self._build_iteration_feedback(
+                validation=self.iterations[-1]["validation"] if self.iterations else None,
+                evaluation=self.iterations[-1]["evaluation"] if self.iterations else None,
+            )
+
+            logger.info("\n[2/5] Engineer Agent 生成/修正策略代碼...")
+            if iteration == 1 or not self.current_code:
+                code_result = self.developer.generate_strategy_code_structured(
+                    strategy,
+                    md_context=md_context,
+                )
+            else:
+                code_result = self.developer.revise_strategy_code(
+                    strategy,
+                    feedback=self._feedback_to_dict(feedback),
+                    previous_code=self.current_code,
+                    md_context=md_context,
+                )
+
+            code_path = artifact_dir / f"iteration_{iteration:02d}_{strategy.name}.py"
+            code_path = self._persist_code_artifact(code_path, code_result.code)
+            raw_path = artifact_dir / f"iteration_{iteration:02d}_{strategy.name}.raw.txt"
+            self._persist_raw_response_artifact(raw_path, code_result.raw_response)
+            validation = self._validate_generated_code(
+                filepath=str(code_path),
+                strategy_spec=strategy,
+                backtest_config=BacktestConfig(
+                    symbol=self.config.symbol,
+                    interval=self.config.interval,
+                    start_date=self.config.start_date,
+                    end_date=self.config.end_date,
+                    initial_capital=self.config.initial_capital,
+                ),
+            )
+            self.current_code = code_result.code
+            self.current_code_path = str(code_path)
+
+            if not validation.passed:
+                logger.warning("   代碼驗證失敗，進入下一輪修正")
+                for issue in validation.issues:
+                    logger.warning(f"   - {issue}")
+                self.iterations.append({
+                    "iteration": iteration,
+                    "strategy": strategy,
+                    "code_result": code_result,
+                    "validation": validation,
+                    "evaluation": None,
+                    "report": None,
+                })
+                if iteration >= self.config.max_iterations:
+                    logger.warning("   已達最大迭代次數，停止優化")
+                continue
+
+            self.current_validated_code_path = validation.filepath
+
+            # 3. 回測
+            logger.info("\n[3/5] 執行回測...")
             backtest_config = BacktestConfig(
                 symbol=self.config.symbol,
                 interval=self.config.interval,
@@ -169,26 +265,32 @@ class StrategyRDWorkflow:
             try:
                 backtest_report = self.backtester.run_backtest(
                     strategy_name=strategy.name,
+                    strategy_class=self._load_strategy_class(validation.filepath),
                     strategy_params=strategy.parameters,
                     config=backtest_config,
                 )
             except Exception as e:
                 logger.error(f"   回測失敗: {e}")
-                # 嘗試使用預設策略
-                logger.info("   嘗試使用預設 MA Crossover 策略...")
-                backtest_report = self.backtester.run_backtest(
-                    strategy_name="MA_Crossover",
-                    strategy_params={"fast_ma": 20, "slow_ma": 50},
-                    config=backtest_config,
-                )
+                validation.issues.append(f"Full backtest failed: {e}")
+                self.iterations.append({
+                    "iteration": iteration,
+                    "strategy": strategy,
+                    "code_result": code_result,
+                    "validation": validation,
+                    "evaluation": None,
+                    "report": None,
+                })
+                if iteration >= self.config.max_iterations:
+                    logger.warning("   已達最大迭代次數，停止優化")
+                continue
             
             logger.info(f"   收益率: {backtest_report.total_return:.2f}%")
             logger.info(f"   Sharpe: {backtest_report.sharpe_ratio:.2f}")
             logger.info(f"   回撤:   {backtest_report.max_drawdown:.2f}%")
             logger.info(f"   勝率:   {backtest_report.win_rate:.2f}%")
             
-            # 3. 評估
-            logger.info("\n[3/4] 評估策略...")
+            # 4. 評估
+            logger.info("\n[4/5] 評估策略...")
             evaluation = self.evaluator.evaluate(
                 backtest_report,
                 target_metrics=target_metrics,
@@ -197,8 +299,8 @@ class StrategyRDWorkflow:
             logger.info(f"   {evaluation.summary}")
             logger.info(f"   分數: {evaluation.score:.0f}/100")
             
-            # 4. 報告
-            logger.info("\n[4/4] 生成報告...")
+            # 5. 報告
+            logger.info("\n[5/5] 生成報告...")
             report = self.reporter.generate_report(
                 market_analysis=market_analysis or "比特幣呈現上漲趨勢",
                 strategy_spec=strategy,
@@ -211,6 +313,8 @@ class StrategyRDWorkflow:
             self.iterations.append({
                 'iteration': iteration,
                 'strategy': strategy,
+                'code_result': code_result,
+                'validation': validation,
                 'backtest_report': backtest_report,
                 'evaluation': evaluation,
                 'report': report,
@@ -238,6 +342,140 @@ class StrategyRDWorkflow:
                     break
         
         return self.current_report
+
+    def _persist_code_artifact(self, filepath: Path, code: str) -> Path:
+        """保存每輪生成的代碼 artifact。"""
+        filepath.parent.mkdir(parents=True, exist_ok=True)
+        filepath.write_text(code, encoding="utf-8")
+        return filepath
+
+    def _persist_raw_response_artifact(self, filepath: Path, raw_response: str) -> Path:
+        """保存每輪原始 LLM 回應，便於比對模型輸出與清洗後代碼。"""
+        filepath.parent.mkdir(parents=True, exist_ok=True)
+        filepath.write_text(raw_response or "", encoding="utf-8")
+        return filepath
+
+    def _load_strategy_class(self, filepath: str):
+        """從生成檔案中載入策略類別。"""
+        spec = importlib.util.spec_from_file_location(Path(filepath).stem, filepath)
+        if spec is None or spec.loader is None:
+            return None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        from strategies.base import BaseStrategy
+
+        for attr_name in dir(module):
+            attr = getattr(module, attr_name)
+            if isinstance(attr, type) and issubclass(attr, BaseStrategy) and attr is not BaseStrategy:
+                return attr
+        return None
+
+    def _validate_generated_code(
+        self,
+        filepath: str,
+        strategy_spec: StrategySpec,
+        backtest_config: BacktestConfig,
+    ) -> CodeValidationResult:
+        """驗證生成代碼，包含語法、匯入、實例化與 smoke backtest。"""
+        issues: List[str] = []
+
+        code = Path(filepath).read_text(encoding="utf-8")
+        try:
+            ast.parse(code)
+        except SyntaxError as exc:
+            issues.append(f"Syntax error: {exc}")
+            return CodeValidationResult(False, filepath=filepath, issues=issues)
+
+        strategy_class = self._load_strategy_class(filepath)
+        if strategy_class is None:
+            issues.append("No BaseStrategy subclass found")
+            return CodeValidationResult(False, filepath=filepath, issues=issues)
+
+        try:
+            strategy = self._instantiate_strategy(strategy_class, strategy_spec.parameters)
+        except Exception as exc:
+            issues.append(f"Strategy instantiation failed: {exc}")
+            return CodeValidationResult(False, filepath=filepath, class_name=strategy_class.__name__, issues=issues)
+
+        try:
+            sample_data = self.backtester.load_data(
+                backtest_config.symbol,
+                backtest_config.interval,
+                backtest_config.start_date,
+                backtest_config.end_date,
+            ).head(300).copy()
+            signals = strategy.generate_signals(sample_data)
+            if "signal" not in signals.columns:
+                issues.append("Generated signals missing 'signal' column")
+                return CodeValidationResult(False, filepath=filepath, class_name=strategy_class.__name__, issues=issues)
+
+            engine = create_backtest_runner(self.config.data_dir)
+            smoke_report = engine.run_backtest(
+                strategy_name=strategy_spec.name,
+                strategy_class=strategy_class,
+                strategy_params=strategy_spec.parameters,
+                config=BacktestConfig(
+                    symbol=backtest_config.symbol,
+                    interval=backtest_config.interval,
+                    start_date=backtest_config.start_date,
+                    end_date=backtest_config.end_date,
+                    initial_capital=min(backtest_config.initial_capital, 1000.0),
+                ),
+            )
+            smoke_metrics = {
+                "total_return": smoke_report.total_return,
+                "sharpe_ratio": smoke_report.sharpe_ratio,
+                "max_drawdown": smoke_report.max_drawdown,
+                "total_trades": smoke_report.total_trades,
+            }
+        except Exception as exc:
+            issues.append(f"Smoke backtest failed: {exc}")
+            return CodeValidationResult(False, filepath=filepath, class_name=strategy_class.__name__, issues=issues)
+
+        return CodeValidationResult(
+            passed=True,
+            filepath=filepath,
+            class_name=strategy_class.__name__,
+            issues=[],
+            smoke_metrics=smoke_metrics,
+        )
+
+    def _instantiate_strategy(self, strategy_class, parameters: Dict[str, Any]):
+        """根據 __init__ 簽名建立策略實例。"""
+        parameters = parameters or {}
+        sig = inspect.signature(strategy_class.__init__)
+        accepted = {}
+        for name, param in sig.parameters.items():
+            if name == "self":
+                continue
+            if param.kind in (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY):
+                if name in parameters:
+                    accepted[name] = parameters[name]
+        return strategy_class(**accepted)
+
+    def _build_iteration_feedback(
+        self,
+        validation: Optional[CodeValidationResult],
+        evaluation,
+    ) -> IterationFeedback:
+        """整理 validation / evaluation 成結構化 feedback。"""
+        feedback = IterationFeedback()
+        if validation and validation.issues:
+            feedback.validation_issues.extend(validation.issues)
+            feedback.required_changes.extend(validation.issues)
+        if evaluation is not None:
+            feedback.performance_issues.extend(getattr(evaluation, "weaknesses", []))
+            feedback.required_changes.extend(getattr(evaluation, "recommendations", []))
+        return feedback
+
+    def _feedback_to_dict(self, feedback: IterationFeedback) -> Dict[str, Any]:
+        return {
+            "bugs": feedback.bugs,
+            "performance_issues": feedback.performance_issues,
+            "required_changes": feedback.required_changes,
+            "validation_issues": feedback.validation_issues,
+        }
     
     def approve_strategy(self, notes: str = "") -> None:
         """

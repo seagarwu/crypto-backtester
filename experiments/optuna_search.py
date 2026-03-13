@@ -123,8 +123,12 @@ def run_optuna_optimization(
         if constraints and not constraints(params):
             raise optuna.exceptions.TrialPruned("Constraint not satisfied")
         
-        # 檢查 short_window < long_window
-        if params.get("short_window", 0) >= params.get("long_window", 0):
+        # 僅對均線交叉類參數檢查 short_window < long_window
+        if (
+            "short_window" in params
+            and "long_window" in params
+            and params["short_window"] >= params["long_window"]
+        ):
             raise optuna.exceptions.TrialPruned("short_window must be less than long_window")
         
         try:

@@ -367,6 +367,28 @@ python -m pytest tests/test_reports.py -v
 python -m pytest tests/test_strategy_rd_workflow.py -v
 ```
 
+### Agentic Loop 自測
+
+若要先驗證 workflow 編排本身，而不是直接打真實 LLM API，可使用：
+
+```bash
+python scripts/debug_agentic_loop.py --scenario first_pass
+python scripts/debug_agentic_loop.py --scenario repair_success
+python scripts/debug_agentic_loop.py --scenario always_fail
+```
+
+用途：
+- `first_pass`: 第一輪即成功
+- `repair_success`: 第一輪故意失敗，第二輪修復成功
+- `always_fail`: 驗證迭代失敗與 artifact 輸出
+
+輸出重點：
+- `reports/debug_loop/iterations/*.py`
+- `reports/debug_loop/iterations/*.raw.txt`
+
+已知限制：
+- 若本機 `pytest` 在 import `pandas` 時出現 `numpy.dtype size changed`，需先修正本機 `numpy/pandas` binary compatibility，再執行完整測試
+
 ### 測試覆蓋
 
 | 模組 | 測試檔案 | 測試數 |

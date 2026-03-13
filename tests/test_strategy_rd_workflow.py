@@ -9,7 +9,12 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from agents.strategy_rd_workflow import StrategyRDWorkflow, RDConfig
+from agents.strategy_rd_workflow import (
+    StrategyRDWorkflow,
+    RDConfig,
+    CodeValidationResult,
+    IterationFeedback,
+)
 from agents.strategy_evaluator_agent import EvaluationResult
 
 
@@ -157,6 +162,40 @@ class TestStrategyRDWorkflow:
         
         best = workflow.get_best_report()
         assert best is None
+
+    def test_build_iteration_feedback(self):
+        workflow = StrategyRDWorkflow()
+
+        validation = CodeValidationResult(
+            passed=False,
+            issues=["Syntax error", "Smoke backtest failed"],
+        )
+
+        class DummyEvaluation:
+            weaknesses = ["Sharpe Ratio 低"]
+            recommendations = ["提高 Sharpe Ratio", "降低回撤"]
+
+        feedback = workflow._build_iteration_feedback(validation, DummyEvaluation())
+
+        assert "Syntax error" in feedback.validation_issues
+        assert "Sharpe Ratio 低" in feedback.performance_issues
+        assert "降低回撤" in feedback.required_changes
+
+    def test_feedback_to_dict(self):
+        workflow = StrategyRDWorkflow()
+        feedback = IterationFeedback(
+            bugs=["import error"],
+            performance_issues=["high drawdown"],
+            required_changes=["add stop loss"],
+            validation_issues=["missing signal column"],
+        )
+
+        data = workflow._feedback_to_dict(feedback)
+
+        assert data["bugs"] == ["import error"]
+        assert data["performance_issues"] == ["high drawdown"]
+        assert data["required_changes"] == ["add stop loss"]
+        assert data["validation_issues"] == ["missing signal column"]
 
 
 if __name__ == "__main__":
