@@ -125,6 +125,25 @@ class TestStrategyMDManagement:
         assert spec.exit_rules == "價格觸及上軌賣出"
         assert spec.parameters == {"period": 20, "std": 2.0}
         assert spec.timeframe == "15m"
+
+    def test_parse_md_to_spec_strips_indicator_quotes(self, conversation, temp_md_dir):
+        conversation._create_strategy_md("QuotedIndicators")
+
+        md_content = """# QuotedIndicators
+
+## 策略規格
+- 名稱: QuotedIndicators
+- 描述: 測試帶引號的指標
+- 指標: ['BBand', 'Volume']
+- 進場規則: test
+- 出場規則: test
+- 參數: {'higher_timeframe': '4h', 'entry_timeframe': '1h'}
+- 時間框架: 1h
+"""
+        spec = conversation._parse_md_to_spec(md_content)
+
+        assert spec.indicators == ["BBand", "Volume"]
+        assert conversation._should_use_local_template(spec) is True
     
     def test_load_strategy_md_no_files(self, conversation, temp_md_dir):
         """測試載入不存在的 MD"""

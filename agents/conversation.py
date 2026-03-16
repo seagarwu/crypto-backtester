@@ -118,13 +118,17 @@ class MyStrategy(BaseStrategy):
         # 返回格式: {"signal": 1/-1/0, "strength": 0.0~1.0}
         pass
     
-    def generate_signals(self, data: pd.DataFrame) -> pd.Series:
+    def generate_signals(self, data: pd.DataFrame) -> pd.DataFrame:
         # 生成完整信號序列
         signals = []
         for i in range(len(data)):
             # 對每根 K 線計算信號
             signals.append(0)  # 0=持有, 1=買入, -1=賣出
-        return pd.Series(signals, index=data.index)
+        df = data.copy()
+        if "datetime" not in df.columns:
+            df["datetime"] = df.index
+        df["signal"] = signals
+        return df
 ```
 
 請生成完整的、可直接運行的策略代碼。"""
@@ -407,7 +411,7 @@ class ConversationalStrategyDeveloper:
                     # 添加最小實現
                     code = code.strip()
                     if 'def generate_signals' not in code:
-                        code += '\n\n    def generate_signals(self, data):\n        from strategies.base import SignalType\n        return [SignalType.HOLD] * len(data)'
+                        code += '\n\n    def generate_signals(self, data):\n        import pandas as pd\n        from strategies.base import SignalType\n        df = data.copy()\n        if "datetime" not in df.columns:\n            df["datetime"] = df.index\n        df["signal"] = SignalType.HOLD\n        return df'
                     full_code = header + code
                     try:
                         ast.parse(full_code)
@@ -426,13 +430,22 @@ class ConversationalStrategyDeveloper:
 
     def _should_use_local_template(self, spec: "StrategySpec") -> bool:
         """判斷是否應優先使用本地模板生成策略。"""
-        indicators = {indicator.lower() for indicator in (spec.indicators or [])}
+        indicators = self._normalized_indicator_set(spec)
         params = spec.parameters or {}
         return (
             "bband" in indicators
             and "higher_timeframe" in params
             and "entry_timeframe" in params
         )
+
+    def _normalized_indicator_set(self, spec: "StrategySpec") -> set[str]:
+        """統一清理 indicator 名稱，避免 MD 解析殘留引號或大小寫造成判斷失敗。"""
+        normalized = set()
+        for indicator in (spec.indicators or []):
+            value = str(indicator).strip().strip("'\"").strip()
+            if value:
+                normalized.add(value.lower())
+        return normalized
 
     def _generate_local_template_strategy(self, spec: "StrategySpec") -> str:
         """使用本地模板生成穩定的策略程式碼。"""
@@ -758,7 +771,11 @@ class {class_name}(BaseStrategy):
                         spec_dict['description'] = value
                     elif key == "指標":
                         # 解析列表
-                        spec_dict['indicators'] = [x.strip() for x in value.strip('[]').split(',')]
+                        spec_dict['indicators'] = [
+                            x.strip().strip("'\"").strip()
+                            for x in value.strip('[]').split(',')
+                            if x.strip()
+                        ]
                     elif key == "進場規則":
                         spec_dict['entry_rules'] = value
                     elif key.startswith('出台') or key.startswith('出场') or key.startswith('出讓') or key.startswith('\u51FA\u5834') or key.startswith('\u51FA\u573A'):
@@ -990,9 +1007,16 @@ class {class_name}(BaseStrategy):
                                 row_data = data.iloc[: i + 1]
                                 result = self.calculate_signals(row_data, {})
                                 signals.append(result.get("signal", SignalType.HOLD))
-                            return pd.Series(signals, index=data.index)
-                        signals = [SignalType.HOLD] * len(data)
-                        return pd.Series(signals, index=data.index)
+                            df = data.copy()
+                            if "datetime" not in df.columns:
+                                df["datetime"] = df.index
+                            df["signal"] = signals
+                            return df
+                        df = data.copy()
+                        if "datetime" not in df.columns:
+                            df["datetime"] = df.index
+                        df["signal"] = SignalType.HOLD
+                        return df
                     
                     # 創建新的子類
                     NewClass = type(
@@ -1594,6 +1618,7 @@ class {class_name}(BaseStrategy):
     def _run_optimization(self, spec, price_df, data_path, strategy_class=None):
         """執行 Optuna 參數優化"""
         try:
+            normalized_indicators = self._normalized_indicator_set(spec)
             from strategies import BBandStrategy, MACrossoverStrategy
             from experiments.optuna_search import run_optuna_optimization
             from backtest.engine import BacktestEngine
@@ -1601,7 +1626,7 @@ class {class_name}(BaseStrategy):
             
             # 根據當前實際使用的策略類型選擇
             if strategy_class is None:
-                if "BBand" in spec.indicators:
+                if "bband" in normalized_indicators:
                     strategy_class = BBandStrategy
                 else:
                     strategy_class = MACrossoverStrategy
@@ -1631,7 +1656,7 @@ class {class_name}(BaseStrategy):
                     "volume_multiplier": {"low": 1.2, "high": 3.0, "type": "float"},
                     "stop_loss_pct": {"low": 0.01, "high": 0.05, "type": "float"},
                 }
-            elif "BBand" in spec.indicators or strategy_class is BBandStrategy:
+            elif "bband" in normalized_indicators or strategy_class is BBandStrategy:
                 strategy_class = BBandStrategy
                 param_space = {
                     "bband_period": {"low": 10, "high": 60, "type": "int"},
@@ -1714,6 +1739,7 @@ class {class_name}(BaseStrategy):
     def _execute_development(self, spec, user_input: str = ""):
         """執行策略開發流程"""
         try:
+            normalized_indicators = self._normalized_indicator_set(spec)
             # 使用 spec 中已有的信息，而不是重新解析
             interval = spec.timeframe or "1h"
             symbol = self._extract_symbol_from_spec(spec)
@@ -1795,6 +1821,11 @@ class {class_name}(BaseStrategy):
                     initial_strategy=spec,
                     md_context=md_context,
                 )
+                if workflow.route_decision is not None:
+                    print(
+                        f"   🧭 策略路由: {workflow.route_decision.route.value} "
+                        f"({workflow.route_decision.strategy_family})"
+                    )
 
                 self.current_strategy = workflow.current_strategy or spec
                 self.current_report = report
@@ -1817,40 +1848,64 @@ class {class_name}(BaseStrategy):
                             generated_file=workflow.current_validated_code_path,
                         )
                 else:
-                    print("   ⚠️ Agentic loop 未產出報告，回退到現有策略")
+                    print("   ⚠️ Agentic loop 未產出報告")
                     if workflow.iterations:
                         last_validation = workflow.iterations[-1].get("validation")
                         if last_validation and getattr(last_validation, "issues", None):
                             print("   🔎 最後一輪驗證失敗原因:")
                             for issue in last_validation.issues[:5]:
                                 print(f"      - {issue}")
+                    if workflow.current_code_path:
+                        print(f"   🧾 最後一輪代碼: {workflow.current_code_path}")
+
+                    if self._should_use_local_template(spec):
+                        print("   🛠️ 改用本地模板生成同規格策略，避免再退回不相干的既有策略")
+                        saved_path = self._save_strategy_code(
+                            spec.name,
+                            self._generate_local_template_strategy(spec),
+                        )
+                        if saved_path:
+                            print(f"   🧾 本地模板代碼: {saved_path}")
+                            strategy_class = self._load_generated_strategy(spec.name, saved_path)
+                            self._last_strategy_class = strategy_class
+                            self._update_strategy_md(
+                                spec=spec,
+                                generated_file=saved_path,
+                            )
+                    elif generate_code == "y":
+                        print("   ❌ 本次停止執行：未取得可驗證的策略代碼。")
+                        return
             
             # ========================================
             # 步驟 2: 如果沒有生成新代碼，使用現有策略
             # ========================================
-            if strategy_class is None:
+            if strategy_class is None and generate_code != "y":
                 generated_path = self._generated_strategy_path(spec.name)
                 if generated_path.exists():
                     print(f"   📦 載入既有生成策略: {generated_path}")
                     strategy_class = self._load_generated_strategy(spec.name, str(generated_path))
 
-            if strategy_class is None:
+            if strategy_class is None and generate_code != "y":
                 from strategies import BBandStrategy, MACrossoverStrategy, MultiTimeframeBBandStrategy
                 
                 # 根據策略類型選擇現有策略
                 if (
-                    "BBand" in spec.indicators
+                    "bband" in normalized_indicators
                     and spec.parameters
                     and "higher_timeframe" in spec.parameters
                     and "entry_timeframe" in spec.parameters
                 ):
                     strategy_class = MultiTimeframeBBandStrategy
-                elif "BBand" in spec.indicators:
+                elif "bband" in normalized_indicators:
                     strategy_class = BBandStrategy
                 else:
                     strategy_class = MACrossoverStrategy
             
             # 如果已由 workflow 執行完整回測，直接進入後續選項
+            if strategy_class is None:
+                print("   ❌ 沒有可執行的策略類別，停止本次執行。")
+                return
+
             if self.current_report and self.current_result is not None and generate_code == "y":
                 backtest_result = self.current_result
                 from metrics import calculate_metrics

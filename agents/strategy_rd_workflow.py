@@ -24,6 +24,8 @@ from pathlib import Path
 import ast
 import importlib.util
 import inspect
+import re
+from enum import Enum
 
 # 確保可以匯入模組
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -100,6 +102,19 @@ class IterationFeedback:
     validation_issues: List[str] = field(default_factory=list)
 
 
+class StrategyRoute(Enum):
+    KNOWN = "known"
+    COMPOSABLE = "composable"
+    NOVEL = "novel"
+
+
+@dataclass
+class RouteDecision:
+    route: StrategyRoute
+    strategy_family: str = ""
+    reason: str = ""
+
+
 class StrategyRDWorkflow:
     """
     策略研發閉環
@@ -138,6 +153,7 @@ class StrategyRDWorkflow:
         self.current_code: str = ""
         self.current_code_path: str = ""
         self.current_validated_code_path: str = ""
+        self.route_decision: Optional[RouteDecision] = None
     
     def run(
         self,
@@ -194,8 +210,16 @@ class StrategyRDWorkflow:
                     strategy = self.current_strategy
             
             self.current_strategy = strategy
+            if iteration == 1:
+                self.route_decision = self._classify_strategy(strategy)
             logger.info(f"   策略: {strategy.name}")
             logger.info(f"   指標: {', '.join(strategy.indicators)}")
+            if self.route_decision:
+                logger.info(
+                    "   路由: %s (%s)",
+                    self.route_decision.route.value,
+                    self.route_decision.reason,
+                )
 
             feedback = self._build_iteration_feedback(
                 validation=self.iterations[-1]["validation"] if self.iterations else None,
@@ -203,18 +227,24 @@ class StrategyRDWorkflow:
             )
 
             logger.info("\n[2/5] Engineer Agent 生成/修正策略代碼...")
-            if iteration == 1 or not self.current_code:
+            if iteration == 1 and self.route_decision and self.route_decision.route in (StrategyRoute.KNOWN, StrategyRoute.COMPOSABLE):
+                code_result = self._build_deterministic_code_result(strategy, self.route_decision)
+            elif iteration == 1 or not self.current_code:
                 code_result = self.developer.generate_strategy_code_structured(
                     strategy,
                     md_context=md_context,
                 )
             else:
-                code_result = self.developer.revise_strategy_code(
-                    strategy,
-                    feedback=self._feedback_to_dict(feedback),
-                    previous_code=self.current_code,
-                    md_context=md_context,
-                )
+                if self.route_decision and self.route_decision.route in (StrategyRoute.KNOWN, StrategyRoute.COMPOSABLE):
+                    logger.info("   使用 deterministic route 重新生成代碼，不走自由修補")
+                    code_result = self._build_deterministic_code_result(strategy, self.route_decision)
+                else:
+                    code_result = self.developer.revise_strategy_code(
+                        strategy,
+                        feedback=self._feedback_to_dict(feedback),
+                        previous_code=self.current_code,
+                        md_context=md_context,
+                    )
 
             code_path = artifact_dir / f"iteration_{iteration:02d}_{strategy.name}.py"
             code_path = self._persist_code_artifact(code_path, code_result.code)
@@ -349,6 +379,311 @@ class StrategyRDWorkflow:
         filepath.write_text(code, encoding="utf-8")
         return filepath
 
+    def _normalized_indicators(self, strategy_spec: StrategySpec) -> set[str]:
+        normalized = set()
+        for indicator in (strategy_spec.indicators or []):
+            value = str(indicator).strip().strip("'\"").strip().lower()
+            if value:
+                normalized.add(value)
+        return normalized
+
+    def _classify_strategy(self, strategy_spec: StrategySpec) -> RouteDecision:
+        indicators = self._normalized_indicators(strategy_spec)
+        params = strategy_spec.parameters or {}
+        known_indicators = {"ma", "ma20", "ma50", "ma60", "bband", "volume", "rsi", "macd", "breakout", "high", "low"}
+
+        if {"bband", "volume"}.issubset(indicators) and "higher_timeframe" in params and "entry_timeframe" in params:
+            return RouteDecision(
+                route=StrategyRoute.KNOWN,
+                strategy_family="multi_timeframe_bband_reversion",
+                reason="Known multi-timeframe BBand pattern with explicit params",
+            )
+        if "bband" in indicators and "higher_timeframe" not in params and "entry_timeframe" not in params:
+            return RouteDecision(
+                route=StrategyRoute.KNOWN,
+                strategy_family="bband_reversion",
+                reason="Known single-timeframe BBand family",
+            )
+        if "ma" in indicators or {"ma20", "ma50"}.issubset(indicators):
+            return RouteDecision(
+                route=StrategyRoute.KNOWN,
+                strategy_family="ma_crossover",
+                reason="Known moving-average crossover family",
+            )
+        if indicators and indicators.issubset(known_indicators):
+            return RouteDecision(
+                route=StrategyRoute.COMPOSABLE,
+                strategy_family="generic_rule_based",
+                reason="Uses known indicators but novel composition",
+            )
+        return RouteDecision(
+            route=StrategyRoute.NOVEL,
+            strategy_family="novel",
+            reason="Needs design review before code generation",
+        )
+
+    def _build_deterministic_code_result(
+        self,
+        strategy_spec: StrategySpec,
+        route_decision: RouteDecision,
+    ) -> EngineerCodeResult:
+        if route_decision.strategy_family == "multi_timeframe_bband_reversion":
+            code = self._generate_multi_timeframe_bband_code(strategy_spec)
+        elif route_decision.strategy_family == "bband_reversion":
+            code = self._generate_single_timeframe_bband_code(strategy_spec)
+        elif route_decision.strategy_family == "ma_crossover":
+            code = self._generate_ma_crossover_code(strategy_spec)
+        else:
+            code = self._generate_generic_rule_based_code(strategy_spec)
+
+        return EngineerCodeResult(
+            code=code,
+            summary=f"Deterministic {route_decision.route.value} route for {route_decision.strategy_family}",
+            assumptions=[route_decision.reason],
+            raw_response=f"[deterministic_route]\nroute={route_decision.route.value}\nfamily={route_decision.strategy_family}\nreason={route_decision.reason}",
+        )
+
+    def _safe_class_name(self, strategy_name: str) -> str:
+        class_name = re.sub(r"[^a-zA-Z0-9_]", "", strategy_name.title().replace(" ", "")) or "GeneratedStrategy"
+        if not class_name.endswith("Strategy"):
+            class_name += "Strategy"
+        return class_name
+
+    def _generate_multi_timeframe_bband_code(self, strategy_spec: StrategySpec) -> str:
+        class_name = self._safe_class_name(strategy_spec.name)
+        params = strategy_spec.parameters or {}
+        bb_period = int(params.get("bb_period", 20))
+        bb_std = float(params.get("bb_std", 2.0))
+        volume_ma_period = int(params.get("volume_ma_period", 20))
+        volume_multiplier = float(params.get("volume_multiplier", 2.0))
+        stop_loss_pct = float(params.get("stop_loss_pct", 0.03))
+        higher_timeframe = str(params.get("higher_timeframe", "4h"))
+        entry_timeframe = str(params.get("entry_timeframe", strategy_spec.timeframe or "1h"))
+        strategy_name = strategy_spec.name.replace('"', '\\"')
+
+        return f'''from strategies.base import BaseStrategy, SignalType
+import pandas as pd
+
+
+class {class_name}(BaseStrategy):
+    def __init__(
+        self,
+        bb_period: int = {bb_period},
+        bb_std: float = {bb_std},
+        volume_ma_period: int = {volume_ma_period},
+        volume_multiplier: float = {volume_multiplier},
+        stop_loss_pct: float = {stop_loss_pct},
+        higher_timeframe: str = "{higher_timeframe}",
+        entry_timeframe: str = "{entry_timeframe}",
+        name: str = "{strategy_name}",
+    ):
+        super().__init__(name=name)
+        self.bb_period = bb_period
+        self.bb_std = bb_std
+        self.volume_ma_period = volume_ma_period
+        self.volume_multiplier = volume_multiplier
+        self.stop_loss_pct = stop_loss_pct
+        self.higher_timeframe = higher_timeframe
+        self.entry_timeframe = entry_timeframe
+        self.required_indicators = [
+            f"BBand_{{bb_period}}_{{bb_std}}",
+            f"Volume_MA_{{volume_ma_period}}",
+        ]
+
+    def calculate_signals(self, data: pd.DataFrame, indicators: dict) -> dict:
+        row = data.iloc[-1]
+        long_setup = bool(row.get("higher_long_setup", False))
+        touch_lower = bool(row.get("touch_lower", False))
+        touch_upper = bool(row.get("touch_upper", False))
+        volume_ok = bool(row.get("volume_ok", False))
+        in_position = bool(row.get("in_position", False))
+        stop_loss_hit = bool(row.get("stop_loss_hit", False))
+        if in_position and (touch_upper or stop_loss_hit):
+            return {{"signal": SignalType.SELL, "strength": 1.0}}
+        if (not in_position) and long_setup and touch_lower and volume_ok:
+            return {{"signal": SignalType.BUY, "strength": 1.0}}
+        return {{"signal": SignalType.HOLD, "strength": 0.0}}
+
+    def _calc_bbands(self, df: pd.DataFrame) -> pd.DataFrame:
+        df = df.copy()
+        df["bb_middle"] = df["close"].rolling(window=self.bb_period).mean()
+        rolling_std = df["close"].rolling(window=self.bb_period).std()
+        df["bb_upper"] = df["bb_middle"] + (rolling_std * self.bb_std)
+        df["bb_lower"] = df["bb_middle"] - (rolling_std * self.bb_std)
+        return df
+
+    def generate_signals(self, data: pd.DataFrame) -> pd.DataFrame:
+        df = data.copy()
+        df["datetime"] = pd.to_datetime(df["datetime"])
+        df = df.sort_values("datetime").reset_index(drop=True)
+        higher_df = (
+            df.set_index("datetime")
+            .resample(self.higher_timeframe.upper())
+            .agg({{"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}})
+            .dropna()
+            .reset_index()
+        )
+        higher_df = self._calc_bbands(higher_df)
+        higher_df["higher_long_setup"] = higher_df["low"] <= higher_df["bb_lower"]
+        higher_df = higher_df[["datetime", "higher_long_setup"]]
+        df = self._calc_bbands(df)
+        df["volume_ma"] = df["volume"].rolling(window=self.volume_ma_period).mean()
+        df["volume_ok"] = df["volume"] >= (df["volume_ma"] * self.volume_multiplier)
+        df["touch_lower"] = df["low"] <= df["bb_lower"]
+        df["touch_upper"] = df["high"] >= df["bb_upper"]
+        df = pd.merge_asof(
+            df.sort_values("datetime"),
+            higher_df.sort_values("datetime"),
+            on="datetime",
+            direction="backward",
+        )
+        df["higher_long_setup"] = df["higher_long_setup"].fillna(False)
+        in_position = False
+        entry_price = None
+        signals = []
+        for _, row in df.iterrows():
+            stop_loss_hit = False
+            if in_position and entry_price is not None:
+                stop_price = entry_price * (1.0 - self.stop_loss_pct)
+                stop_loss_hit = row["low"] <= stop_price
+            signal = SignalType.HOLD
+            if in_position and (row["touch_upper"] or stop_loss_hit):
+                signal = SignalType.SELL
+                in_position = False
+                entry_price = None
+            elif (not in_position) and row["higher_long_setup"] and row["touch_lower"] and row["volume_ok"]:
+                signal = SignalType.BUY
+                in_position = True
+                entry_price = row["close"]
+            signals.append(signal)
+        df["signal"] = signals
+        return df
+'''
+
+    def _generate_single_timeframe_bband_code(self, strategy_spec: StrategySpec) -> str:
+        class_name = self._safe_class_name(strategy_spec.name)
+        params = strategy_spec.parameters or {}
+        period = int(params.get("bband_period", params.get("bb_period", 20)))
+        std = float(params.get("bband_std", params.get("bb_std", 2.0)))
+        entry_threshold = float(params.get("entry_threshold", 0.1))
+        exit_threshold = float(params.get("exit_threshold", 0.9))
+        strategy_name = strategy_spec.name.replace('"', '\\"')
+
+        return f'''from strategies.base import BaseStrategy, SignalType
+import pandas as pd
+
+
+class {class_name}(BaseStrategy):
+    def __init__(
+        self,
+        bband_period: int = {period},
+        bband_std: float = {std},
+        entry_threshold: float = {entry_threshold},
+        exit_threshold: float = {exit_threshold},
+        name: str = "{strategy_name}",
+    ):
+        super().__init__(name=name)
+        self.bband_period = bband_period
+        self.bband_std = bband_std
+        self.entry_threshold = entry_threshold
+        self.exit_threshold = exit_threshold
+        self.required_indicators = [f"BBand_{{bband_period}}_{{bband_std}}"]
+
+    def calculate_signals(self, data: pd.DataFrame, indicators: dict) -> dict:
+        row = data.iloc[-1]
+        if row.get("bb_position", 0.5) <= self.entry_threshold:
+            return {{"signal": SignalType.BUY, "strength": 1.0}}
+        if row.get("bb_position", 0.5) >= self.exit_threshold:
+            return {{"signal": SignalType.SELL, "strength": 1.0}}
+        return {{"signal": SignalType.HOLD, "strength": 0.0}}
+
+    def generate_signals(self, data: pd.DataFrame) -> pd.DataFrame:
+        df = data.copy()
+        df["bb_middle"] = df["close"].rolling(window=self.bband_period).mean()
+        rolling_std = df["close"].rolling(window=self.bband_period).std()
+        df["bb_upper"] = df["bb_middle"] + rolling_std * self.bband_std
+        df["bb_lower"] = df["bb_middle"] - rolling_std * self.bband_std
+        bb_range = (df["bb_upper"] - df["bb_lower"]).replace(0, pd.NA)
+        df["bb_position"] = ((df["close"] - df["bb_lower"]) / bb_range).fillna(0.5)
+        df["signal"] = SignalType.HOLD
+        in_position = False
+        for idx in range(len(df)):
+            if not in_position and df.loc[df.index[idx], "bb_position"] <= self.entry_threshold:
+                df.loc[df.index[idx], "signal"] = SignalType.BUY
+                in_position = True
+            elif in_position and df.loc[df.index[idx], "bb_position"] >= self.exit_threshold:
+                df.loc[df.index[idx], "signal"] = SignalType.SELL
+                in_position = False
+        return df
+'''
+
+    def _generate_ma_crossover_code(self, strategy_spec: StrategySpec) -> str:
+        class_name = self._safe_class_name(strategy_spec.name)
+        params = strategy_spec.parameters or {}
+        short_window = int(params.get("short_window", params.get("fast_ma", 20)))
+        long_window = int(params.get("long_window", params.get("slow_ma", 50)))
+        strategy_name = strategy_spec.name.replace('"', '\\"')
+        return f'''from strategies.base import BaseStrategy, SignalType
+import pandas as pd
+
+
+class {class_name}(BaseStrategy):
+    def __init__(self, short_window: int = {short_window}, long_window: int = {long_window}, name: str = "{strategy_name}"):
+        super().__init__(name=name)
+        self.short_window = short_window
+        self.long_window = long_window
+        self.required_indicators = [f"MA_{{short_window}}", f"MA_{{long_window}}"]
+
+    def calculate_signals(self, data: pd.DataFrame, indicators: dict) -> dict:
+        row = data.iloc[-1]
+        prev = data.iloc[-2] if len(data) > 1 else row
+        if prev.get("ma_short", 0) <= prev.get("ma_long", 0) and row.get("ma_short", 0) > row.get("ma_long", 0):
+            return {{"signal": SignalType.BUY, "strength": 1.0}}
+        if prev.get("ma_short", 0) >= prev.get("ma_long", 0) and row.get("ma_short", 0) < row.get("ma_long", 0):
+            return {{"signal": SignalType.SELL, "strength": 1.0}}
+        return {{"signal": SignalType.HOLD, "strength": 0.0}}
+
+    def generate_signals(self, data: pd.DataFrame) -> pd.DataFrame:
+        df = data.copy()
+        df["ma_short"] = df["close"].rolling(window=self.short_window).mean()
+        df["ma_long"] = df["close"].rolling(window=self.long_window).mean()
+        df["signal"] = SignalType.HOLD
+        for idx in range(1, len(df)):
+            prev = df.iloc[idx - 1]
+            row = df.iloc[idx]
+            if pd.isna(prev["ma_short"]) or pd.isna(prev["ma_long"]) or pd.isna(row["ma_short"]) or pd.isna(row["ma_long"]):
+                continue
+            if prev["ma_short"] <= prev["ma_long"] and row["ma_short"] > row["ma_long"]:
+                df.loc[df.index[idx], "signal"] = SignalType.BUY
+            elif prev["ma_short"] >= prev["ma_long"] and row["ma_short"] < row["ma_long"]:
+                df.loc[df.index[idx], "signal"] = SignalType.SELL
+        return df
+'''
+
+    def _generate_generic_rule_based_code(self, strategy_spec: StrategySpec) -> str:
+        class_name = self._safe_class_name(strategy_spec.name)
+        strategy_name = strategy_spec.name.replace('"', '\\"')
+        indicators = ", ".join(sorted(self._normalized_indicators(strategy_spec)))
+        return f'''from strategies.base import BaseStrategy, SignalType
+import pandas as pd
+
+
+class {class_name}(BaseStrategy):
+    def __init__(self, name: str = "{strategy_name}"):
+        super().__init__(name=name)
+        self.required_indicators = []
+
+    def calculate_signals(self, data: pd.DataFrame, indicators: dict) -> dict:
+        return {{"signal": SignalType.HOLD, "strength": 0.0}}
+
+    def generate_signals(self, data: pd.DataFrame) -> pd.DataFrame:
+        df = data.copy()
+        if "datetime" not in df.columns:
+            df["datetime"] = df.index
+        df["signal"] = SignalType.HOLD
+        return df
+'''
+
     def _persist_raw_response_artifact(self, filepath: Path, raw_response: str) -> Path:
         """保存每輪原始 LLM 回應，便於比對模型輸出與清洗後代碼。"""
         filepath.parent.mkdir(parents=True, exist_ok=True)
@@ -381,13 +716,36 @@ class StrategyRDWorkflow:
         issues: List[str] = []
 
         code = Path(filepath).read_text(encoding="utf-8")
+        if not code.strip():
+            issues.append("No code generated")
+            return CodeValidationResult(False, filepath=filepath, issues=issues)
+
+        forbidden_imports = {
+            "pandas_ta": "Forbidden dependency 'pandas_ta' is not available in this project",
+            "talib": "Forbidden dependency 'talib' is not available in this project",
+            "backtrader": "Forbidden dependency 'backtrader' is not available in this project",
+            "vectorbt": "Forbidden dependency 'vectorbt' is not available in this project",
+        }
+        for module_name, message in forbidden_imports.items():
+            if f"import {module_name}" in code or f"from {module_name} " in code:
+                issues.append(message)
+        if issues:
+            return CodeValidationResult(False, filepath=filepath, issues=issues)
+
         try:
             ast.parse(code)
         except SyntaxError as exc:
             issues.append(f"Syntax error: {exc}")
             return CodeValidationResult(False, filepath=filepath, issues=issues)
 
-        strategy_class = self._load_strategy_class(filepath)
+        try:
+            strategy_class = self._load_strategy_class(filepath)
+        except ModuleNotFoundError as exc:
+            issues.append(f"Strategy import failed: missing dependency '{exc.name}'")
+            return CodeValidationResult(False, filepath=filepath, issues=issues)
+        except Exception as exc:
+            issues.append(f"Strategy import failed: {exc}")
+            return CodeValidationResult(False, filepath=filepath, issues=issues)
         if strategy_class is None:
             issues.append("No BaseStrategy subclass found")
             return CodeValidationResult(False, filepath=filepath, issues=issues)

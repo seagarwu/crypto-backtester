@@ -358,8 +358,16 @@ class StrategyDeveloperAgent:
         Returns:
             str: Python 代碼
         """
-        llm = self._get_llm()
+        code, _ = self._generate_strategy_code_with_raw(spec, md_context=md_context)
+        return code
 
+    def _generate_strategy_code_with_raw(
+        self,
+        spec: StrategySpec,
+        md_context: str = None,
+    ) -> tuple[str, str]:
+        """生成策略代碼並保留原始模型輸出，便於 fallback debug。"""
+        llm = self._get_llm()
         context = self._extract_strategy_context(md_context)
 
         prompt = f"""你是一個專業的量化交易策略工程師。
@@ -373,7 +381,8 @@ class StrategyDeveloperAgent:
 4. 第一行必須是 import 或 from。
 5. 程式碼中必須包含一個繼承 BaseStrategy 的 class。
 6. 必須實作 required_indicators、calculate_signals、generate_signals。
-7. generate_signals 必須回傳 pandas.Series，index=data.index。
+7. generate_signals 必須回傳 pandas.DataFrame，至少包含 datetime 與 signal 欄位。
+8. 只允許使用 Python 標準庫、pandas、numpy 與 repo 內模組；禁止使用 pandas_ta、ta-lib、backtrader、vectorbt 或其他額外第三方套件。
 
 策略規格：
 - 名稱: {spec.name}
@@ -400,24 +409,22 @@ class StrategyName(BaseStrategy):
     def calculate_signals(self, data: pd.DataFrame, indicators: dict) -> dict:
         return {{"signal": SignalType.HOLD, "strength": 0.0}}
 
-    def generate_signals(self, data: pd.DataFrame) -> pd.Series:
-        return pd.Series([SignalType.HOLD] * len(data), index=data.index)
+    def generate_signals(self, data: pd.DataFrame) -> pd.DataFrame:
+        df = data.copy()
+        if "datetime" not in df.columns:
+            df["datetime"] = df.index
+        df["signal"] = SignalType.HOLD
+        return df
 """
-        
+
         try:
             response = llm.invoke(prompt)
-            # 清理可能的 markdown 標記
-            code = response.content
-            if code.startswith("```python"):
-                code = code[10:]
-            elif code.startswith("```"):
-                code = code[3:]
-            if code.endswith("```"):
-                code = code[:-3]
-            return code.strip()
+            raw = response.content if hasattr(response, "content") else str(response)
+            code = self._clean_code_block(raw)
+            return code.strip(), raw
         except Exception as e:
             logger.error(f"代碼生成失敗: {e}")
-            return ""
+            return "", ""
 
     def generate_strategy_code_structured(
         self,
@@ -450,12 +457,15 @@ class StrategyName(BaseStrategy):
             )
         except Exception as e:
             logger.error(f"結構化代碼生成失敗: {e}")
-            fallback_code = self.generate_strategy_code(spec, md_context=md_context)
+            fallback_code, fallback_raw = self._generate_strategy_code_with_raw(
+                spec,
+                md_context=md_context,
+            )
             return EngineerCodeResult(
                 code=fallback_code,
                 summary="Fallback to legacy code generation",
                 assumptions=[],
-                raw_response="",
+                raw_response=self._merge_raw_responses(raw if 'raw' in locals() else "", fallback_raw),
             )
 
     def revise_strategy_code(
@@ -489,11 +499,15 @@ class StrategyName(BaseStrategy):
             )
         except Exception as e:
             logger.error(f"修正代碼生成失敗: {e}")
+            fallback_code, fallback_raw = self._generate_strategy_code_with_raw(
+                spec,
+                md_context=md_context,
+            )
             return EngineerCodeResult(
-                code=previous_code,
-                summary="Fallback to previous code",
+                code=fallback_code,
+                summary="Fallback to legacy regeneration after revision failure",
                 assumptions=[],
-                raw_response="",
+                raw_response=self._merge_raw_responses(raw if 'raw' in locals() else "", fallback_raw),
             )
 
     def _build_structured_code_prompt(
@@ -528,6 +542,7 @@ class StrategyName(BaseStrategy):
 4. 必須實作 required_indicators、calculate_signals、generate_signals。
 5. generate_signals 必須回傳 DataFrame，至少包含 datetime 與 signal 欄位。
 6. 不要省略任何 method，不要用 ...、TODO、佔位文字。
+7. 禁止匯入 pandas_ta、ta-lib、backtrader、vectorbt 或其他 repo 未內建的第三方交易函式庫。
 
 策略規格：
 - 名稱: {spec.name}
@@ -582,6 +597,7 @@ class StrategyName(BaseStrategy):
 5. 如果 feedback 提到缺少 generate_signals，直接補上完整實作
 6. 不要輸出半截 method，不要輸出 ...、TODO、註解佔位
 7. generate_signals 必須回傳 DataFrame，至少包含 datetime 與 signal 欄位
+8. 禁止匯入 pandas_ta、ta-lib、backtrader、vectorbt 或其他 repo 未內建的第三方交易函式庫
 
 策略規格：
 - 名稱: {spec.name}
@@ -649,6 +665,15 @@ class StrategyName(BaseStrategy):
 
         extracted = self._extract_python_code(code)
         return extracted or code
+
+    def _merge_raw_responses(self, primary_raw: str, fallback_raw: str) -> str:
+        """保留 structured / fallback 兩段原始輸出，方便事後比對。"""
+        parts = []
+        if primary_raw:
+            parts.append("[structured_attempt]\n" + primary_raw.strip())
+        if fallback_raw:
+            parts.append("[legacy_fallback]\n" + fallback_raw.strip())
+        return "\n\n".join(parts)
 
     def _extract_python_code(self, content: str) -> str:
         """從混合文字中提取最可能的 Python 程式碼。"""

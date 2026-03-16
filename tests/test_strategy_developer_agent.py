@@ -6,6 +6,7 @@ Strategy Developer Agent 測試
 import pytest
 import sys
 import os
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -185,6 +186,94 @@ class DemoStrategy(BaseStrategy):
 
         assert code.startswith("from strategies.base import BaseStrategy")
         assert code.endswith("pass")
+
+    def test_generate_strategy_code_structured_preserves_raw_on_fallback(self):
+        agent = StrategyDeveloperAgent()
+        spec = StrategySpec(name="Demo", description="demo")
+
+        class FakeLLM:
+            def __init__(self):
+                self.calls = 0
+
+            def invoke(self, prompt):
+                self.calls += 1
+                if self.calls == 1:
+                    return SimpleNamespace(content="這不是合法 structured response")
+                return SimpleNamespace(
+                    content="""from strategies.base import BaseStrategy, SignalType
+import pandas as pd
+
+class DemoStrategy(BaseStrategy):
+    @property
+    def required_indicators(self):
+        return []
+
+    def calculate_signals(self, data: pd.DataFrame, indicators: dict) -> dict:
+        return {"signal": SignalType.HOLD, "strength": 0.0}
+
+    def generate_signals(self, data: pd.DataFrame) -> pd.DataFrame:
+        df = data.copy()
+        if "datetime" not in df.columns:
+            df["datetime"] = df.index
+        df["signal"] = SignalType.HOLD
+        return df
+"""
+                )
+
+        agent.llm = FakeLLM()
+
+        result = agent.generate_strategy_code_structured(spec)
+
+        assert "class DemoStrategy" in result.code
+        assert "[structured_attempt]" in result.raw_response
+        assert "[legacy_fallback]" in result.raw_response
+        assert "這不是合法 structured response" in result.raw_response
+
+    def test_revise_strategy_code_does_not_reuse_previous_broken_code(self):
+        agent = StrategyDeveloperAgent()
+        spec = StrategySpec(name="Demo", description="demo")
+        previous_code = "class BrokenStrategy("
+
+        class FakeLLM:
+            def __init__(self):
+                self.calls = 0
+
+            def invoke(self, prompt):
+                self.calls += 1
+                if self.calls == 1:
+                    return SimpleNamespace(content="仍然不是合法 structured response")
+                return SimpleNamespace(
+                    content="""from strategies.base import BaseStrategy, SignalType
+import pandas as pd
+
+class DemoStrategy(BaseStrategy):
+    @property
+    def required_indicators(self):
+        return []
+
+    def calculate_signals(self, data: pd.DataFrame, indicators: dict) -> dict:
+        return {"signal": SignalType.HOLD, "strength": 0.0}
+
+    def generate_signals(self, data: pd.DataFrame) -> pd.DataFrame:
+        df = data.copy()
+        if "datetime" not in df.columns:
+            df["datetime"] = df.index
+        df["signal"] = SignalType.HOLD
+        return df
+"""
+                )
+
+        agent.llm = FakeLLM()
+
+        result = agent.revise_strategy_code(
+            spec=spec,
+            feedback={"validation_issues": ["Syntax error"]},
+            previous_code=previous_code,
+        )
+
+        assert result.code != previous_code
+        assert "class DemoStrategy" in result.code
+        assert "legacy regeneration" in result.summary
 
 
 if __name__ == "__main__":
