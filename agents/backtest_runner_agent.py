@@ -24,6 +24,7 @@ import numpy as np
 # 確保可以匯入模組
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from agents.agent_prompting import build_agent_context
 from backtest.engine import BacktestEngine, BacktestResult
 from strategies.ma_crossover import MACrossoverStrategy
 
@@ -96,6 +97,7 @@ class BacktestRunnerAgent:
             project_root = Path(__file__).parent.parent
             data_dir = str(project_root / "data")
         self.data_dir = data_dir
+        self.agent_context = build_agent_context("backtest_agent")
         
         # 嘗試載入策略
         self.strategies = self._discover_strategies()

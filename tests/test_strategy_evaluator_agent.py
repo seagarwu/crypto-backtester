@@ -51,6 +51,8 @@ class TestStrategyEvaluatorAgent:
         
         assert agent.model == "gemini-3-flash-preview"
         assert isinstance(agent.metrics, EvaluationMetrics)
+        assert "Evaluator Agent Rules" in agent.agent_context
+        assert "Evaluator Agent Rules" in agent.system_prompt
     
     def test_agent_with_custom_metrics(self):
         metrics = EvaluationMetrics(min_sharpe=2.0)

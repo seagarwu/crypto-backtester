@@ -18,6 +18,7 @@ import logging
 # 確保可以匯入模組
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from agents.agent_prompting import build_agent_context
 from core.llm_manager import get_llm
 
 # Agent 角色定義（避免循環導入）
@@ -111,8 +112,9 @@ class StrategyEvaluatorAgent:
         self.model = model
         self.metrics = metrics or EvaluationMetrics()
         self.llm = None
+        self.agent_context = build_agent_context("evaluator_agent")
         
-        self.system_prompt = """你是一個專業的量化策略評估專家。
+        base_prompt = """你是一個專業的量化策略評估專家。
 
 你的職責：
 - 評估交易策略的歷史表現
@@ -124,6 +126,7 @@ class StrategyEvaluatorAgent:
 2. 優勢分析
 3. 劣勢分析
 4. 改進建議"""
+        self.system_prompt = f"{base_prompt}\n\n{self.agent_context}" if self.agent_context else base_prompt
     
     def _get_llm(self):
         """懒加载 LLM"""

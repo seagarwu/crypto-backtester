@@ -27,6 +27,8 @@ class TestReporterAgent:
         
         assert agent.model == "gemini-3-flash-preview"
         assert agent.llm is None
+        assert "Reporter Agent Rules" in agent.agent_context
+        assert "Reporter Agent Rules" in agent.system_prompt
     
     def test_agent_with_custom_model(self):
         agent = ReporterAgent(model="gpt-4")

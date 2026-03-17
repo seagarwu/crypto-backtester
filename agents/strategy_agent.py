@@ -13,6 +13,7 @@ from datetime import datetime
 import pandas as pd
 import numpy as np
 
+from agents.agent_prompting import build_agent_context
 from strategies.base import BaseStrategy
 from strategies.ma_crossover import MACrossoverStrategy
 from backtest import run_backtest
@@ -77,6 +78,7 @@ class StrategyAgent:
         self.data_source = data_source
         self.initial_capital = initial_capital
         self.commission_rate = commission_rate
+        self.agent_context = build_agent_context("strategy_agent")
         
         self.selector = StrategySelector()
         

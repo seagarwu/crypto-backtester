@@ -19,6 +19,7 @@ import logging
 # 確保可以匯入模組
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from agents.agent_prompting import build_agent_context
 from core.llm_manager import get_llm
 
 # Agent 角色定義（避免循環導入）
@@ -119,8 +120,9 @@ class ReporterAgent:
     ):
         self.model = model
         self.llm = None
+        self.agent_context = build_agent_context("reporter_agent")
         
-        self.system_prompt = AGENT_PROMPTS.get(
+        base_prompt = AGENT_PROMPTS.get(
             AgentRole.REPORTER,
             """你是一個投資組合經理助手。
 
@@ -134,6 +136,7 @@ class ReporterAgent:
 2. 詳細分析
 3. 建議行動"""
         )
+        self.system_prompt = f"{base_prompt}\n\n{self.agent_context}" if self.agent_context else base_prompt
     
     def _get_llm(self):
         """懒加载 LLM"""
