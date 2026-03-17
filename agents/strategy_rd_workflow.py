@@ -640,7 +640,7 @@ class {class_name}(BaseStrategy):
         df = df.sort_values("datetime").reset_index(drop=True)
         higher_df = (
             df.set_index("datetime")
-            .resample(self.higher_timeframe.upper())
+            .resample(str(self.higher_timeframe).lower())
             .agg({{"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}})
             .dropna()
             .reset_index()

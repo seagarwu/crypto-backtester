@@ -2,7 +2,7 @@
 
 一個**可擴充的加密貨幣量化策略回測骨架**，專為打造「專屬量化研究與回測 agent」的第一階段基礎。
 
-[![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
 ## 🎯 專案目標
@@ -63,6 +63,14 @@ crypto-backtester/
 ```bash
 pip install -r requirements.txt
 ```
+
+建議使用 Python 3.10 建立乾淨虛擬環境。完整測試已驗證的依賴組合為：
+
+- `numpy==1.26.4`
+- `pandas==2.0.3`
+- `optuna==4.8.0`
+
+若你在本機執行測試時遇到 `numpy.dtype size changed`，通常代表 `numpy/pandas` binary mismatch，請重建虛擬環境或重新安裝上述版本組合。
 
 ### 2. 下載 Binance 歷史資料
 

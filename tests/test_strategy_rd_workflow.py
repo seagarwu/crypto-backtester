@@ -293,6 +293,14 @@ class TestStrategyRDWorkflow:
         assert workflow.route_decision.route is StrategyRoute.KNOWN
         assert "Deterministic known route" in workflow.iterations[0]["code_result"].summary
 
+    def test_multi_timeframe_deterministic_code_keeps_lowercase_resample_freq(self):
+        workflow = StrategyRDWorkflow()
+        spec = build_known_spec()
+
+        code = workflow._generate_multi_timeframe_bband_code(spec)
+
+        assert '.resample(str(self.higher_timeframe).lower())' in code
+
     def test_run_uses_human_decision_provider_to_stop_after_checkpoint(self):
         workflow = StrategyRDWorkflow(RDConfig(max_iterations=3, report_dir="reports/test_human_stop"))
         workflow.backtester = FakeBacktester()
