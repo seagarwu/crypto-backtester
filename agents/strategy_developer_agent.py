@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # 直接從 core 匯入
 from core.llm_manager import get_llm
+from agents.agent_prompting import build_agent_context
 
 # Agent 角色定義（避免循環導入）
 from enum import Enum
@@ -382,10 +383,14 @@ class StrategyDeveloperAgent:
         """生成策略代碼並保留原始模型輸出，便於 fallback debug。"""
         llm = self._get_llm()
         context = self._extract_strategy_context(md_context)
+        agent_context = build_agent_context("engineer_agent")
 
         prompt = f"""你是一個專業的量化交易策略工程師。
 
 任務：根據下列策略規格，直接輸出完整可執行的 Python 原始碼。
+
+工程規則與工具上下文：
+{agent_context or '無'}
 
 限制：
 1. 只輸出 Python 原始碼。
@@ -531,10 +536,14 @@ class StrategyName(BaseStrategy):
         previous_code: str,
     ) -> str:
         """建立首輪或全量重生成 prompt。"""
+        agent_context = build_agent_context("engineer_agent")
         return f"""你是一個專業的量化交易策略工程師。
 
 請根據策略規格、前一輪代碼與 feedback，輸出嚴格的三個區塊。
 不要輸出 markdown，不要輸出額外說明，不要輸出 JSON。
+
+工程規則與工具上下文：
+{agent_context or '無'}
 
 輸出格式必須完全如下：
 <SUMMARY>
@@ -585,10 +594,14 @@ class StrategyName(BaseStrategy):
         previous_code: str,
     ) -> str:
         """建立修補導向 prompt，避免每輪重寫整份 class。"""
+        agent_context = build_agent_context("engineer_agent")
         return f"""你是一個 Python 策略修復工程師。
 
 你的任務不是重寫整份策略，而是基於現有代碼做最小必要修正，讓它通過驗證。
 請保留現有 class 名稱、參數名稱與主要策略邏輯，只修復 feedback 指出的問題。
+
+工程規則與工具上下文：
+{agent_context or '無'}
 
 不要輸出 markdown，不要輸出額外說明，不要輸出 JSON。
 輸出格式必須完全如下：

@@ -146,6 +146,21 @@ class TestStrategyDeveloperAgent:
         assert data["assumptions"] == ["a1"]
         assert code == "from x import y"
 
+    def test_structured_prompt_includes_engineer_agent_context(self):
+        agent = StrategyDeveloperAgent()
+        spec = StrategySpec(name="Demo", description="demo")
+
+        prompt = agent._build_structured_code_prompt(
+            spec=spec,
+            context="local context",
+            feedback_text="{}",
+            previous_code="",
+        )
+
+        assert "工程規則與工具上下文" in prompt
+        assert "Engineer Agent Rules" in prompt
+        assert "Shared Tool Capabilities" in prompt
+
     def test_parse_structured_response(self):
         agent = StrategyDeveloperAgent()
         raw = """<SUMMARY>
