@@ -1874,6 +1874,7 @@ class {class_name}(BaseStrategy):
                         data_dir=str(project_root / "data"),
                         report_dir="reports",
                         max_iterations=3,
+                        engineer_execution_mode="subprocess",
                     )
                 )
                 report = workflow.run(

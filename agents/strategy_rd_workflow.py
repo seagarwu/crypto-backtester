@@ -26,6 +26,7 @@ import importlib.util
 import inspect
 import re
 from enum import Enum
+from uuid import uuid4
 
 # 確保可以匯入模組
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -35,6 +36,13 @@ from agents.strategy_developer_agent import (
     StrategyDeveloperAgent,
     StrategySpec,
     EngineerCodeResult,
+)
+from agents.session_tasks import (
+    EngineerExecutionMode,
+    EngineerSessionInput,
+    EngineerSessionRunner,
+    EngineerSessionTask,
+    EngineerTechnique,
 )
 from agents.backtest_runner_agent import (
     BacktestRunnerAgent, 
@@ -85,6 +93,9 @@ class RDConfig:
 
     # Human-in-the-loop research artifacts
     research_dir: str = "research"
+
+    # Engineer execution model
+    engineer_execution_mode: str = "subprocess"
 
 
 @dataclass
@@ -155,6 +166,12 @@ class StrategyRDWorkflow:
         
         # 初始化所有 Agents
         self.developer = StrategyDeveloperAgent()
+        self.engineer_session = EngineerSessionRunner(
+            task=EngineerSessionTask(
+                developer=self.developer,
+                deterministic_builder=lambda spec: self._build_deterministic_code_result(spec, self.route_decision),
+            )
+        )
         self.backtester = create_backtest_runner(self.config.data_dir)
         self.evaluator = create_strategy_evaluator(
             metrics=EvaluationMetrics(
@@ -176,6 +193,8 @@ class StrategyRDWorkflow:
         self.current_code: str = ""
         self.current_code_path: str = ""
         self.current_validated_code_path: str = ""
+        self.current_strategy_id: str = ""
+        self.current_parent_strategy_id: str = ""
         self.route_decision: Optional[RouteDecision] = None
         self.pending_human_decision: Optional[HumanDecision] = None
         self.research_writer = ResearchArtifactWriter(self.config.research_dir)
@@ -215,6 +234,24 @@ class StrategyRDWorkflow:
         if not overrides:
             return "none"
         return ", ".join(f"{key}={value}" for key, value in sorted(overrides.items()))
+
+    def _ensure_strategy_identity(self) -> None:
+        if not self.current_strategy_id:
+            self.current_strategy_id = str(uuid4())
+
+    def _fork_strategy_identity(self) -> None:
+        previous_strategy_id = self.current_strategy_id
+        self.current_parent_strategy_id = previous_strategy_id
+        self.current_strategy_id = str(uuid4())
+
+    def _build_identity(self, iteration: int) -> Dict[str, Any]:
+        self._ensure_strategy_identity()
+        return {
+            "strategy_id": self.current_strategy_id,
+            "iteration_id": str(uuid4()),
+            "parent_strategy_id": self.current_parent_strategy_id,
+            "iteration": iteration,
+        }
     
     def run(
         self,
@@ -252,15 +289,18 @@ class StrategyRDWorkflow:
             if iteration == 1 and initial_strategy is not None:
                 logger.info("\n[1/4] 使用現有策略規格...")
                 strategy = initial_strategy
+                self._ensure_strategy_identity()
             elif (
                 self.pending_human_decision is not None
                 and self.pending_human_decision.action is HumanDecisionAction.PIVOT
                 and self.pending_human_decision.updated_strategy is not None
             ):
                 logger.info("\n[1/4] 根據 human checkpoint pivot 到新策略規格...")
+                self._fork_strategy_identity()
                 strategy = self.pending_human_decision.updated_strategy
             elif iteration == 1:
                 logger.info("\n[1/4] 開發新策略...")
+                self._ensure_strategy_identity()
                 strategy = self.developer.develop_strategy(
                     market_analysis=market_analysis or "比特幣呈現上漲趨勢",
                     existing_strategies=existing_strategies,
@@ -279,6 +319,7 @@ class StrategyRDWorkflow:
                     strategy = self.current_strategy
             
             self.current_strategy = strategy
+            identity = self._build_identity(iteration)
             if iteration == 1:
                 self.route_decision = self._classify_strategy(strategy)
             logger.info(f"   策略: {strategy.name}")
@@ -296,6 +337,14 @@ class StrategyRDWorkflow:
                 timeframe=self.config.interval,
                 acceptance_criteria=self._acceptance_criteria(),
                 human_decision=self.pending_human_decision,
+                identity=identity,
+            )
+            self.research_writer.write_strategy_handoff(
+                iteration=iteration,
+                strategy_spec=strategy,
+                human_decision=self.pending_human_decision,
+                acceptance_criteria=self._acceptance_criteria(),
+                identity=identity,
             )
 
             feedback = self._build_iteration_feedback(
@@ -305,24 +354,26 @@ class StrategyRDWorkflow:
             )
 
             logger.info("\n[2/5] Engineer Agent 生成/修正策略代碼...")
-            if iteration == 1 and self.route_decision and self.route_decision.route in (StrategyRoute.KNOWN, StrategyRoute.COMPOSABLE):
-                code_result = self._build_deterministic_code_result(strategy, self.route_decision)
-            elif iteration == 1 or not self.current_code:
-                code_result = self.developer.generate_strategy_code_structured(
-                    strategy,
-                    md_context=md_context,
-                )
-            else:
-                if self.route_decision and self.route_decision.route in (StrategyRoute.KNOWN, StrategyRoute.COMPOSABLE):
+            if self.route_decision and self.route_decision.route in (StrategyRoute.KNOWN, StrategyRoute.COMPOSABLE):
+                technique = EngineerTechnique.DETERMINISTIC_TEMPLATE
+                if iteration > 1 and self.current_code:
                     logger.info("   使用 deterministic route 重新生成代碼，不走自由修補")
-                    code_result = self._build_deterministic_code_result(strategy, self.route_decision)
-                else:
-                    code_result = self.developer.revise_strategy_code(
-                        strategy,
-                        feedback=self._feedback_to_dict(feedback),
-                        previous_code=self.current_code,
-                        md_context=md_context,
-                    )
+            elif iteration == 1 or not self.current_code:
+                technique = EngineerTechnique.STRUCTURED_GENERATION
+            else:
+                technique = EngineerTechnique.REPO_NATIVE_REPAIR
+
+            session_result = self.engineer_session.run(
+                EngineerSessionInput(
+                    strategy_handoff_path=str(self.research_writer.research_dir / "strategy_handoff.json"),
+                    technique=technique,
+                    md_context=md_context,
+                    previous_code=self.current_code,
+                    feedback=self._feedback_to_dict(feedback),
+                ),
+                mode=EngineerExecutionMode(self.config.engineer_execution_mode),
+            )
+            code_result = session_result.code_result
 
             code_path = artifact_dir / f"iteration_{iteration:02d}_{strategy.name}.py"
             code_path = self._persist_code_artifact(code_path, code_result.code)
@@ -347,6 +398,15 @@ class StrategyRDWorkflow:
                 code_result=code_result,
                 validation=validation,
                 code_path=str(code_path),
+                identity=identity,
+            )
+            self.research_writer.write_engineer_handoff(
+                iteration=iteration,
+                strategy_spec=strategy,
+                code_result=code_result,
+                validation=validation,
+                code_path=str(code_path),
+                identity=identity,
             )
 
             if not validation.passed:
@@ -355,6 +415,7 @@ class StrategyRDWorkflow:
                     logger.warning(f"   - {issue}")
                 self.iterations.append({
                     "iteration": iteration,
+                    "identity": identity,
                     "strategy": strategy,
                     "code_result": code_result,
                     "validation": validation,
@@ -365,6 +426,7 @@ class StrategyRDWorkflow:
                 })
                 self._write_failed_iteration_artifacts(
                     iteration=iteration,
+                    identity=identity,
                     strategy=strategy,
                     validation=validation,
                     backtest_status="validation_failed",
@@ -405,6 +467,7 @@ class StrategyRDWorkflow:
                 validation.issues.append(f"Full backtest failed: {e}")
                 self.iterations.append({
                     "iteration": iteration,
+                    "identity": identity,
                     "strategy": strategy,
                     "code_result": code_result,
                     "validation": validation,
@@ -415,6 +478,7 @@ class StrategyRDWorkflow:
                 })
                 self._write_failed_iteration_artifacts(
                     iteration=iteration,
+                    identity=identity,
                     strategy=strategy,
                     validation=validation,
                     backtest_status="failed",
@@ -454,6 +518,7 @@ class StrategyRDWorkflow:
 
             self.iterations.append({
                 'iteration': iteration,
+                'identity': identity,
                 'strategy': strategy,
                 'code_result': code_result,
                 'validation': validation,
@@ -497,6 +562,7 @@ class StrategyRDWorkflow:
                 timeframe=self.config.interval,
                 acceptance_criteria=self._acceptance_criteria(),
                 human_decision=human_decision,
+                identity=identity,
             )
             self.research_writer.write_backtest_report(
                 iteration=iteration,
@@ -508,6 +574,16 @@ class StrategyRDWorkflow:
                 notes=list(getattr(evaluation, "weaknesses", []) or []),
                 dataset_metadata=dataset_metadata,
                 human_decision=human_decision,
+                identity=identity,
+            )
+            self.research_writer.write_backtest_handoff(
+                iteration=iteration,
+                strategy_spec=strategy,
+                backtest_report=backtest_report,
+                evaluation=evaluation,
+                dataset_metadata=dataset_metadata,
+                status="success",
+                identity=identity,
             )
             self.research_writer.append_iteration_log(
                 iteration=iteration,
@@ -520,6 +596,15 @@ class StrategyRDWorkflow:
                 human_decision=human_decision,
                 next_action=human_decision.action.value,
                 dataset_metadata=dataset_metadata,
+                identity=identity,
+            )
+            self.research_writer.write_evaluation_handoff(
+                iteration=iteration,
+                strategy_spec=strategy,
+                evaluation=evaluation,
+                proposed_action=proposed_action.value,
+                human_decision=human_decision,
+                identity=identity,
             )
 
             logger.info(
@@ -1035,6 +1120,7 @@ class {class_name}(BaseStrategy):
     def _write_failed_iteration_artifacts(
         self,
         iteration: int,
+        identity: Dict[str, Any],
         strategy: StrategySpec,
         validation: CodeValidationResult,
         backtest_status: str,
@@ -1060,6 +1146,21 @@ class {class_name}(BaseStrategy):
                 "override_summary": "none",
             },
             human_decision=None,
+            identity=identity,
+        )
+        self.research_writer.write_backtest_handoff(
+            iteration=iteration,
+            strategy_spec=strategy,
+            backtest_report=None,
+            evaluation=None,
+            dataset_metadata={
+                "symbol": self.config.symbol,
+                "interval": self.config.interval,
+                "requested_start": self.config.start_date,
+                "requested_end": self.config.end_date,
+            },
+            status=backtest_status,
+            identity=identity,
         )
         self.research_writer.append_iteration_log(
             iteration=iteration,
@@ -1082,6 +1183,7 @@ class {class_name}(BaseStrategy):
                 ),
                 "override_summary": "none",
             },
+            identity=identity,
         )
 
     def _propose_next_action(self, evaluation) -> HumanDecisionAction:
@@ -1270,6 +1372,12 @@ def main():
     parser.add_argument("--min-sharpe", type=float, default=1.0, help="最小 Sharpe")
     parser.add_argument("--max-dd", type=float, default=30.0, help="最大回撤%")
     parser.add_argument("--min-winrate", type=float, default=40.0, help="最小勝率%")
+    parser.add_argument(
+        "--engineer-mode",
+        choices=["inline", "subprocess"],
+        default="subprocess",
+        help="Engineer agent execution mode",
+    )
     parser.add_argument("--save", action="store_true", help="保存報告")
     
     args = parser.parse_args()
@@ -1285,6 +1393,7 @@ def main():
         min_sharpe=args.min_sharpe,
         max_drawdown=args.max_dd,
         min_win_rate=args.min_winrate,
+        engineer_execution_mode=args.engineer_mode,
     )
     
     # 執行

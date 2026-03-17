@@ -34,6 +34,11 @@ def _to_serializable(value: Any) -> Any:
         return {str(k): _to_serializable(v) for k, v in value.items()}
     if isinstance(value, (list, tuple, set)):
         return [_to_serializable(v) for v in value]
+    if hasattr(value, "__dict__"):
+        try:
+            return {str(k): _to_serializable(v) for k, v in vars(value).items()}
+        except TypeError:
+            return str(value)
     if hasattr(value, "isoformat") and callable(value.isoformat):
         try:
             return value.isoformat()
@@ -67,6 +72,10 @@ class ResearchArtifactWriter:
             "backtest_report_md": self.research_dir / "backtest_report.md",
             "backtest_report_json": self.research_dir / "backtest_report.json",
             "iteration_log": self.research_dir / "iteration_log.md",
+            "strategy_handoff": self.research_dir / "strategy_handoff.json",
+            "engineer_handoff": self.research_dir / "engineer_handoff.json",
+            "backtest_handoff": self.research_dir / "backtest_handoff.json",
+            "evaluation_handoff": self.research_dir / "evaluation_handoff.json",
         }
         for key, path in files.items():
             if path.exists():
@@ -79,6 +88,37 @@ class ResearchArtifactWriter:
                 _write_text(path, "")
         return files
 
+    def write_strategy_handoff(
+        self,
+        iteration: int,
+        strategy_spec: Any,
+        human_decision: Optional[Any] = None,
+        acceptance_criteria: Optional[Iterable[str]] = None,
+        identity: Optional[Dict[str, Any]] = None,
+    ) -> Path:
+        identity = identity or {}
+        payload = {
+            "handoff_type": "strategy_to_engineer",
+            "iteration": iteration,
+            "strategy_id": _stringify(identity.get("strategy_id")),
+            "iteration_id": _stringify(identity.get("iteration_id")),
+            "parent_strategy_id": _stringify(identity.get("parent_strategy_id")),
+            "strategy_name": _stringify(getattr(strategy_spec, "name", "")),
+            "description": _stringify(getattr(strategy_spec, "description", "")),
+            "indicators": _to_serializable(getattr(strategy_spec, "indicators", [])),
+            "entry_rules": _stringify(getattr(strategy_spec, "entry_rules", "")),
+            "exit_rules": _stringify(getattr(strategy_spec, "exit_rules", "")),
+            "parameters": _to_serializable(getattr(strategy_spec, "parameters", {})),
+            "timeframe": _stringify(getattr(strategy_spec, "timeframe", "")),
+            "risk_level": _stringify(getattr(strategy_spec, "risk_level", "")),
+            "acceptance_criteria": list(acceptance_criteria or []),
+            "human_decision": _to_serializable(human_decision) if human_decision is not None else None,
+        }
+        return _write_text(
+            self.research_dir / "strategy_handoff.json",
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        )
+
     def write_strategy_spec(
         self,
         strategy_spec: Any,
@@ -87,7 +127,9 @@ class ResearchArtifactWriter:
         timeframe: str,
         acceptance_criteria: Iterable[str],
         human_decision: Optional[Any] = None,
+        identity: Optional[Dict[str, Any]] = None,
     ) -> Path:
+        identity = identity or {}
         decision_action = getattr(human_decision, "action", "")
         if hasattr(decision_action, "value"):
             decision_action = decision_action.value
@@ -99,6 +141,9 @@ class ResearchArtifactWriter:
                 "# Strategy Spec",
                 "",
                 "## Metadata",
+                f"- Strategy ID: {_stringify(identity.get('strategy_id')) or 'pending'}",
+                f"- Iteration ID: {_stringify(identity.get('iteration_id')) or 'pending'}",
+                f"- Parent Strategy ID: {_stringify(identity.get('parent_strategy_id')) or 'none'}",
                 f"- Strategy: {_stringify(getattr(strategy_spec, 'name', ''))}",
                 f"- Iteration: {iteration}",
                 f"- Market: {market}",
@@ -144,7 +189,9 @@ class ResearchArtifactWriter:
         code_result: Any,
         validation: Any,
         code_path: str,
+        identity: Optional[Dict[str, Any]] = None,
     ) -> Path:
+        identity = identity or {}
         assumptions = getattr(code_result, "assumptions", []) or []
         issues = getattr(validation, "issues", []) or []
         smoke_metrics = getattr(validation, "smoke_metrics", {}) or {}
@@ -153,6 +200,8 @@ class ResearchArtifactWriter:
             [
                 "# Implementation Note",
                 "",
+                f"- Strategy ID: {_stringify(identity.get('strategy_id')) or 'pending'}",
+                f"- Iteration ID: {_stringify(identity.get('iteration_id')) or 'pending'}",
                 f"- Iteration: {iteration}",
                 f"- Strategy: {_stringify(getattr(strategy_spec, 'name', ''))}",
                 f"- Files changed: {code_path or 'N/A'}",
@@ -171,6 +220,35 @@ class ResearchArtifactWriter:
         )
         return _write_text(self.research_dir / "implementation_note.md", content)
 
+    def write_engineer_handoff(
+        self,
+        iteration: int,
+        strategy_spec: Any,
+        code_result: Any,
+        validation: Any,
+        code_path: str,
+        identity: Optional[Dict[str, Any]] = None,
+    ) -> Path:
+        identity = identity or {}
+        payload = {
+            "handoff_type": "engineer_to_backtest",
+            "iteration": iteration,
+            "strategy_id": _stringify(identity.get("strategy_id")),
+            "iteration_id": _stringify(identity.get("iteration_id")),
+            "parent_strategy_id": _stringify(identity.get("parent_strategy_id")),
+            "strategy_name": _stringify(getattr(strategy_spec, "name", "")),
+            "code_path": code_path,
+            "implementation_summary": _stringify(getattr(code_result, "summary", "")),
+            "assumptions": _to_serializable(getattr(code_result, "assumptions", [])),
+            "validation_passed": bool(getattr(validation, "passed", False)),
+            "validation_issues": _to_serializable(getattr(validation, "issues", [])),
+            "smoke_metrics": _to_serializable(getattr(validation, "smoke_metrics", {})),
+        }
+        return _write_text(
+            self.research_dir / "engineer_handoff.json",
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        )
+
     def write_backtest_report(
         self,
         iteration: int,
@@ -182,6 +260,7 @@ class ResearchArtifactWriter:
         notes: Optional[Iterable[str]] = None,
         dataset_metadata: Optional[Dict[str, Any]] = None,
         human_decision: Optional[Any] = None,
+        identity: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Path]:
         notes_list = [str(item) for item in (notes or [])]
         report_md = self._render_backtest_report_md(
@@ -193,6 +272,7 @@ class ResearchArtifactWriter:
             notes=notes_list,
             dataset_metadata=dataset_metadata or {},
             human_decision=human_decision,
+            identity=identity or {},
         )
         report_json = self._render_backtest_report_json(
             iteration=iteration,
@@ -204,6 +284,7 @@ class ResearchArtifactWriter:
             notes=notes_list,
             dataset_metadata=dataset_metadata or {},
             human_decision=human_decision,
+            identity=identity or {},
         )
         return {
             "markdown": _write_text(self.research_dir / "backtest_report.md", report_md),
@@ -212,6 +293,72 @@ class ResearchArtifactWriter:
                 json.dumps(report_json, ensure_ascii=False, indent=2) + "\n",
             ),
         }
+
+    def write_backtest_handoff(
+        self,
+        iteration: int,
+        strategy_spec: Any,
+        backtest_report: Optional[Any],
+        evaluation: Optional[Any],
+        dataset_metadata: Optional[Dict[str, Any]] = None,
+        status: str = "",
+        identity: Optional[Dict[str, Any]] = None,
+    ) -> Path:
+        identity = identity or {}
+        config = getattr(backtest_report, "config", None)
+        payload = {
+            "handoff_type": "backtest_to_evaluator",
+            "iteration": iteration,
+            "strategy_id": _stringify(identity.get("strategy_id")),
+            "iteration_id": _stringify(identity.get("iteration_id")),
+            "parent_strategy_id": _stringify(identity.get("parent_strategy_id")),
+            "strategy_name": _stringify(getattr(strategy_spec, "name", "")),
+            "status": status,
+            "market": _stringify(getattr(config, "symbol", "")),
+            "timeframe": _stringify(getattr(config, "interval", "")),
+            "period_start": _stringify(getattr(config, "start_date", "")),
+            "period_end": _stringify(getattr(config, "end_date", "")),
+            "dataset_metadata": _to_serializable(dataset_metadata or {}),
+            "metrics": {
+                "net_return_pct": _to_serializable(getattr(backtest_report, "total_return", None)),
+                "max_drawdown_pct": _to_serializable(getattr(backtest_report, "max_drawdown", None)),
+                "sharpe": _to_serializable(getattr(backtest_report, "sharpe_ratio", None)),
+                "win_rate_pct": _to_serializable(getattr(backtest_report, "win_rate", None)),
+                "profit_factor": _to_serializable(getattr(backtest_report, "profit_factor", None)),
+                "total_trades": _to_serializable(getattr(backtest_report, "total_trades", None)),
+            },
+            "evaluation_snapshot": _to_serializable(evaluation) if evaluation is not None else None,
+        }
+        return _write_text(
+            self.research_dir / "backtest_handoff.json",
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        )
+
+    def write_evaluation_handoff(
+        self,
+        iteration: int,
+        strategy_spec: Any,
+        evaluation: Any,
+        proposed_action: str,
+        human_decision: Optional[Any] = None,
+        identity: Optional[Dict[str, Any]] = None,
+    ) -> Path:
+        identity = identity or {}
+        payload = {
+            "handoff_type": "evaluator_to_strategy",
+            "iteration": iteration,
+            "strategy_id": _stringify(identity.get("strategy_id")),
+            "iteration_id": _stringify(identity.get("iteration_id")),
+            "parent_strategy_id": _stringify(identity.get("parent_strategy_id")),
+            "strategy_name": _stringify(getattr(strategy_spec, "name", "")),
+            "evaluation": _to_serializable(evaluation),
+            "proposed_action": proposed_action,
+            "human_decision": _to_serializable(human_decision) if human_decision is not None else None,
+        }
+        return _write_text(
+            self.research_dir / "evaluation_handoff.json",
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        )
 
     def append_iteration_log(
         self,
@@ -225,6 +372,7 @@ class ResearchArtifactWriter:
         human_decision: Optional[Any],
         next_action: str,
         dataset_metadata: Optional[Dict[str, Any]] = None,
+        identity: Optional[Dict[str, Any]] = None,
     ) -> Path:
         path = self.research_dir / "iteration_log.md"
         if not path.exists():
@@ -234,12 +382,16 @@ class ResearchArtifactWriter:
             action = action.value
         rationale = getattr(human_decision, "rationale", "")
         dataset_metadata = dataset_metadata or {}
+        identity = identity or {}
         dataset_summary = dataset_metadata.get("summary", "")
         override_summary = dataset_metadata.get("override_summary", "")
         entry = "\n".join(
             [
                 "",
                 f"## Iteration {iteration}",
+                f"- Strategy ID: {_stringify(identity.get('strategy_id')) or 'pending'}",
+                f"- Iteration ID: {_stringify(identity.get('iteration_id')) or 'pending'}",
+                f"- Parent Strategy ID: {_stringify(identity.get('parent_strategy_id')) or 'none'}",
                 f"- Spec version: {spec_version}",
                 f"- Code status: {code_status}",
                 f"- Backtest status: {backtest_status}",
@@ -267,6 +419,7 @@ class ResearchArtifactWriter:
         notes: Iterable[str],
         dataset_metadata: Dict[str, Any],
         human_decision: Optional[Any],
+        identity: Dict[str, Any],
     ) -> str:
         config = getattr(backtest_report, "config", None)
         run_timestamp = datetime.now().isoformat(timespec="seconds")
@@ -277,6 +430,9 @@ class ResearchArtifactWriter:
         lines = [
             "# Backtest Report",
             "",
+            f"- Strategy ID: {_stringify(identity.get('strategy_id')) or 'pending'}",
+            f"- Iteration ID: {_stringify(identity.get('iteration_id')) or 'pending'}",
+            f"- Parent Strategy ID: {_stringify(identity.get('parent_strategy_id')) or 'none'}",
             f"- Strategy: {_stringify(getattr(strategy_spec, 'name', ''))}",
             f"- Iteration: {iteration}",
             f"- Dataset / symbol / timeframe used: {_stringify(getattr(config, 'symbol', ''))} / {_stringify(getattr(config, 'interval', getattr(strategy_spec, 'timeframe', '')))}",
@@ -328,6 +484,7 @@ class ResearchArtifactWriter:
         notes: Iterable[str],
         dataset_metadata: Dict[str, Any],
         human_decision: Optional[Any],
+        identity: Dict[str, Any],
     ) -> Dict[str, Any]:
         config = getattr(backtest_report, "config", None)
         action = getattr(human_decision, "action", "")
@@ -335,6 +492,9 @@ class ResearchArtifactWriter:
             action = action.value
         return {
             "strategy_name": _stringify(getattr(strategy_spec, "name", "")),
+            "strategy_id": _stringify(identity.get("strategy_id")),
+            "iteration_id": _stringify(identity.get("iteration_id")),
+            "parent_strategy_id": _stringify(identity.get("parent_strategy_id")),
             "iteration": iteration,
             "status": status,
             "market": _stringify(getattr(config, "symbol", "")),

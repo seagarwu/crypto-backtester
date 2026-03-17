@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Backtest To Evaluator Handoff",
+  "type": "object",
+  "required": [
+    "handoff_type",
+    "iteration",
+    "strategy_name",
+    "status",
+    "market",
+    "timeframe",
+    "period_start",
+    "period_end",
+    "dataset_metadata",
+    "metrics"
+  ],
+  "properties": {
+    "handoff_type": { "const": "backtest_to_evaluator" },
+    "iteration": { "type": "integer", "minimum": 0 },
+    "strategy_name": { "type": "string" },
+    "status": { "type": "string" },
+    "market": { "type": "string" },
+    "timeframe": { "type": "string" },
+    "period_start": { "type": "string" },
+    "period_end": { "type": "string" },
+    "dataset_metadata": { "type": "object" },
+    "metrics": { "type": "object" },
+    "evaluation_snapshot": {}
+  },
+  "additionalProperties": true
+}

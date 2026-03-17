@@ -138,8 +138,13 @@ export_results(
 - `research/implementation_note.md`: engineer-agent 的實作記錄
 - `research/backtest_report.md` 與 `research/backtest_report.json`: backtest-agent 的標準化輸出
 - `research/iteration_log.md`: 每輪 loop 的審計軌跡
+- `research/strategy_handoff.json`: strategy -> engineer 的機器可讀交接
+- `research/engineer_handoff.json`: engineer -> backtest 的機器可讀交接
+- `research/backtest_handoff.json`: backtest -> evaluator 的機器可讀交接
+- `research/evaluation_handoff.json`: evaluator -> strategy 的機器可讀交接
 - `research_contracts.py`: 共用契約與標準化輸出邏輯
 - `schemas/backtest_report.schema.json`: 機器可驗證的 report schema
+- `schemas/*_handoff.schema.json`: agent 間 handoff 的 JSON schema
 
 初始化 workspace：
 

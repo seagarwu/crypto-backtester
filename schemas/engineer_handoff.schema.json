@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Engineer To Backtest Handoff",
+  "type": "object",
+  "required": [
+    "handoff_type",
+    "iteration",
+    "strategy_name",
+    "code_path",
+    "implementation_summary",
+    "assumptions",
+    "validation_passed",
+    "validation_issues",
+    "smoke_metrics"
+  ],
+  "properties": {
+    "handoff_type": { "const": "engineer_to_backtest" },
+    "iteration": { "type": "integer", "minimum": 0 },
+    "strategy_name": { "type": "string" },
+    "code_path": { "type": "string" },
+    "implementation_summary": { "type": "string" },
+    "assumptions": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "validation_passed": { "type": "boolean" },
+    "validation_issues": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "smoke_metrics": { "type": "object" }
+  },
+  "additionalProperties": true
+}

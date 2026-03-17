@@ -70,8 +70,80 @@ class TestResearchArtifactWriter:
             "backtest_report_md",
             "backtest_report_json",
             "iteration_log",
+            "strategy_handoff",
+            "engineer_handoff",
+            "backtest_handoff",
+            "evaluation_handoff",
         }
         assert files["iteration_log"].read_text(encoding="utf-8").startswith("# Iteration Log")
+        assert files["strategy_handoff"].read_text(encoding="utf-8").strip() == "{}"
+        assert files["engineer_handoff"].read_text(encoding="utf-8").strip() == "{}"
+
+    def test_write_handoffs_outputs_machine_readable_payloads(self, tmp_path):
+        writer = ResearchArtifactWriter(str(tmp_path / "research"))
+        writer.ensure_workspace()
+
+        strategy_path = writer.write_strategy_handoff(
+            iteration=1,
+            strategy_spec=build_strategy(),
+            human_decision=build_decision(),
+            acceptance_criteria=["Return > 0"],
+            identity={
+                "strategy_id": "strat-123",
+                "iteration_id": "iter-001",
+                "parent_strategy_id": "",
+            },
+        )
+        engineer_path = writer.write_engineer_handoff(
+            iteration=1,
+            strategy_spec=build_strategy(),
+            code_result=build_code_result(),
+            validation=build_validation(),
+            code_path="reports/iterations/demo.py",
+            identity={
+                "strategy_id": "strat-123",
+                "iteration_id": "iter-001",
+                "parent_strategy_id": "",
+            },
+        )
+        backtest_path = writer.write_backtest_handoff(
+            iteration=1,
+            strategy_spec=build_strategy(),
+            backtest_report=build_backtest_report(),
+            evaluation={"result": "needs_improvement"},
+            dataset_metadata={"row_count": 120},
+            status="success",
+            identity={
+                "strategy_id": "strat-123",
+                "iteration_id": "iter-001",
+                "parent_strategy_id": "",
+            },
+        )
+        evaluation_path = writer.write_evaluation_handoff(
+            iteration=1,
+            strategy_spec=build_strategy(),
+            evaluation={"score": 70},
+            proposed_action="continue",
+            human_decision=build_decision(),
+            identity={
+                "strategy_id": "strat-123",
+                "iteration_id": "iter-001",
+                "parent_strategy_id": "",
+            },
+        )
+
+        strategy_payload = json.loads(strategy_path.read_text(encoding="utf-8"))
+        engineer_payload = json.loads(engineer_path.read_text(encoding="utf-8"))
+        backtest_payload = json.loads(backtest_path.read_text(encoding="utf-8"))
+        evaluation_payload = json.loads(evaluation_path.read_text(encoding="utf-8"))
+
+        assert strategy_payload["handoff_type"] == "strategy_to_engineer"
+        assert strategy_payload["strategy_id"] == "strat-123"
+        assert engineer_payload["handoff_type"] == "engineer_to_backtest"
+        assert backtest_payload["handoff_type"] == "backtest_to_evaluator"
+        assert backtest_payload["dataset_metadata"]["row_count"] == 120
+        assert evaluation_payload["handoff_type"] == "evaluator_to_strategy"
+        assert evaluation_payload["proposed_action"] == "continue"
 
     def test_write_strategy_spec_includes_human_checkpoint(self, tmp_path):
         writer = ResearchArtifactWriter(str(tmp_path / "research"))
@@ -112,15 +184,22 @@ class TestResearchArtifactWriter:
                 "override_summary": "interval=1h",
             },
             human_decision=build_decision(),
+            identity={
+                "strategy_id": "strat-123",
+                "iteration_id": "iter-003",
+                "parent_strategy_id": "strat-root",
+            },
         )
 
         md_content = paths["markdown"].read_text(encoding="utf-8")
         json_content = json.loads(paths["json"].read_text(encoding="utf-8"))
 
         assert "Status: success" in md_content
+        assert "Strategy ID: strat-123" in md_content
         assert "Effective dataset rows: 1234" in md_content
         assert "Effective overrides: interval=1h" in md_content
         assert json_content["strategy_name"] == "Demo Strategy"
+        assert json_content["strategy_id"] == "strat-123"
         assert json_content["net_return_pct"] == 12.5
         assert json_content["dataset_row_count"] == 1234
         assert json_content["effective_overrides"] == {"interval": "1h"}
@@ -144,10 +223,16 @@ class TestResearchArtifactWriter:
                 "summary": "BTCUSDT 1h rows=120 window=2024-01-01T00:00:00 -> 2024-01-05T23:00:00",
                 "override_summary": "interval=30m",
             },
+            identity={
+                "strategy_id": "strat-123",
+                "iteration_id": "iter-001",
+                "parent_strategy_id": "",
+            },
         )
 
         content = path.read_text(encoding="utf-8")
         assert "## Iteration 1" in content
+        assert "Strategy ID: strat-123" in content
         assert "Human decision: continue | Need more robustness checks" in content
         assert "Dataset used: BTCUSDT 1h rows=120 window=2024-01-01T00:00:00 -> 2024-01-05T23:00:00" in content
         assert "Effective overrides: interval=30m" in content

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Evaluator To Strategy Handoff",
+  "type": "object",
+  "required": [
+    "handoff_type",
+    "iteration",
+    "strategy_name",
+    "evaluation",
+    "proposed_action"
+  ],
+  "properties": {
+    "handoff_type": { "const": "evaluator_to_strategy" },
+    "iteration": { "type": "integer", "minimum": 0 },
+    "strategy_name": { "type": "string" },
+    "evaluation": {},
+    "proposed_action": { "type": "string" },
+    "human_decision": {}
+  },
+  "additionalProperties": true
+}

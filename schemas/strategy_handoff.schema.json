@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Strategy To Engineer Handoff",
+  "type": "object",
+  "required": [
+    "handoff_type",
+    "iteration",
+    "strategy_name",
+    "description",
+    "indicators",
+    "entry_rules",
+    "exit_rules",
+    "parameters",
+    "timeframe",
+    "risk_level",
+    "acceptance_criteria"
+  ],
+  "properties": {
+    "handoff_type": { "const": "strategy_to_engineer" },
+    "iteration": { "type": "integer", "minimum": 0 },
+    "strategy_name": { "type": "string" },
+    "description": { "type": "string" },
+    "indicators": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "entry_rules": { "type": "string" },
+    "exit_rules": { "type": "string" },
+    "parameters": { "type": "object" },
+    "timeframe": { "type": "string" },
+    "risk_level": { "type": "string" },
+    "acceptance_criteria": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "human_decision": {}
+  },
+  "additionalProperties": true
+}

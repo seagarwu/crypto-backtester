@@ -33,6 +33,7 @@ class TestRDConfig:
         assert config.initial_capital == 10000.0
         assert config.max_iterations == 5
         assert config.min_sharpe == 1.0
+        assert config.engineer_execution_mode == "subprocess"
     
     def test_custom_config(self):
         config = RDConfig(
@@ -361,6 +362,8 @@ class TestStrategyRDWorkflow:
         assert len(workflow.iterations) == 2
         assert workflow.iterations[0]["human_decision"].action is HumanDecisionAction.PIVOT
         assert workflow.iterations[1]["strategy"].name == "Pivoted Strategy"
+        assert workflow.iterations[0]["identity"]["strategy_id"] != workflow.iterations[1]["identity"]["strategy_id"]
+        assert workflow.iterations[1]["identity"]["parent_strategy_id"] == workflow.iterations[0]["identity"]["strategy_id"]
 
     def test_run_applies_human_config_overrides_to_following_iteration(self):
         workflow = StrategyRDWorkflow(RDConfig(max_iterations=2, report_dir="reports/test_human_override"))
@@ -388,6 +391,12 @@ class TestStrategyRDWorkflow:
         assert workflow.iterations[0]["dataset_metadata"]["row_count"] == 120
         assert "rows=120" in workflow.iterations[0]["dataset_metadata"]["summary"]
         assert workflow.iterations[0]["dataset_metadata"]["override_summary"] == "interval=30m"
+        assert workflow.iterations[0]["identity"]["strategy_id"] == workflow.iterations[1]["identity"]["strategy_id"]
+        assert workflow.iterations[0]["identity"]["iteration_id"] != workflow.iterations[1]["identity"]["iteration_id"]
+        assert (workflow.research_writer.research_dir / "strategy_handoff.json").exists()
+        assert (workflow.research_writer.research_dir / "engineer_handoff.json").exists()
+        assert (workflow.research_writer.research_dir / "backtest_handoff.json").exists()
+        assert (workflow.research_writer.research_dir / "evaluation_handoff.json").exists()
 
 
 class FakeBacktester:
