@@ -168,6 +168,12 @@ python scripts/add_engineer_reference.py \
     --constraint "Rewrite into repo-native BaseStrategy form"
 ```
 
+查看目前已整理進 cache 的 engineer 參考：
+
+```bash
+python scripts/list_engineer_references.py
+```
+
 初始化 autonomous 任務工作區：
 
 ```bash

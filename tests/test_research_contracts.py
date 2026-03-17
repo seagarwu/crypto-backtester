@@ -143,6 +143,7 @@ class TestResearchArtifactWriter:
         assert strategy_payload["handoff_type"] == "strategy_to_engineer"
         assert strategy_payload["strategy_id"] == "strat-123"
         assert engineer_payload["handoff_type"] == "engineer_to_backtest"
+        assert engineer_payload["reference_context"] == {}
         assert backtest_payload["handoff_type"] == "backtest_to_evaluator"
         assert backtest_payload["dataset_metadata"]["row_count"] == 120
         assert evaluation_payload["handoff_type"] == "evaluator_to_strategy"
@@ -300,5 +301,6 @@ class TestResearchArtifactWriter:
 
         content = path.read_text(encoding="utf-8")
         assert "Files changed: reports/iterations/iteration_04_demo.py" in content
+        assert "Reference inputs used: none" in content
         assert "Validation performed: passed" in content
         assert "total_return: 3.2" in content

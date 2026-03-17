@@ -240,12 +240,18 @@ class ResearchArtifactWriter:
         code_result: Any,
         validation: Any,
         code_path: str,
+        reference_context: Optional[Dict[str, Any]] = None,
         identity: Optional[Dict[str, Any]] = None,
     ) -> Path:
         identity = identity or {}
         assumptions = getattr(code_result, "assumptions", []) or []
         issues = getattr(validation, "issues", []) or []
         smoke_metrics = getattr(validation, "smoke_metrics", {}) or {}
+        reference_context = reference_context or {}
+        reference_names = [
+            _stringify(item.get("name") or item.get("pattern") or item.get("source"))
+            for item in (reference_context.get("external_references", []) or []) + (reference_context.get("repo_patterns", []) or [])
+        ]
 
         content = "\n".join(
             [
@@ -259,6 +265,7 @@ class ResearchArtifactWriter:
                 f"- Strategy behaviors implemented: {_stringify(getattr(code_result, 'summary', '')) or 'N/A'}",
                 f"- Assumptions: {', '.join(_stringify(item) for item in assumptions) if assumptions else 'none'}",
                 f"- Known gaps: {', '.join(_stringify(item) for item in issues) if issues else 'none'}",
+                f"- Reference inputs used: {', '.join(reference_names) if reference_names else 'none'}",
                 f"- Validation performed: {'passed' if getattr(validation, 'passed', False) else 'failed'}",
                 "",
                 "## Smoke Metrics",
@@ -278,6 +285,7 @@ class ResearchArtifactWriter:
         code_result: Any,
         validation: Any,
         code_path: str,
+        reference_context: Optional[Dict[str, Any]] = None,
         identity: Optional[Dict[str, Any]] = None,
     ) -> Path:
         identity = identity or {}
@@ -291,6 +299,7 @@ class ResearchArtifactWriter:
             "code_path": code_path,
             "implementation_summary": _stringify(getattr(code_result, "summary", "")),
             "assumptions": _to_serializable(getattr(code_result, "assumptions", [])),
+            "reference_context": _to_serializable(reference_context or {}),
             "validation_passed": bool(getattr(validation, "passed", False)),
             "validation_issues": _to_serializable(getattr(validation, "issues", [])),
             "failure_categories": _to_serializable(getattr(validation, "failure_categories", [])),

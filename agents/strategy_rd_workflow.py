@@ -479,6 +479,7 @@ class StrategyRDWorkflow:
                 code_result=code_result,
                 validation=validation,
                 code_path=str(code_path),
+                reference_context=reference_context,
                 identity=identity,
             )
             self.research_writer.write_engineer_handoff(
@@ -487,6 +488,7 @@ class StrategyRDWorkflow:
                 code_result=code_result,
                 validation=validation,
                 code_path=str(code_path),
+                reference_context=reference_context,
                 identity=identity,
             )
             engineer_attempt = {
