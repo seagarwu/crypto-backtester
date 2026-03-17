@@ -19,7 +19,7 @@
 
 ## 📁 專案結構
 
-```
+```text
 crypto-backtester/
 ├── data/                    # 資料相關模組
 │   ├── binance.py          # Binance API 下載（含分頁功能）
@@ -129,6 +129,69 @@ export_results(
     interval="1h",
 )
 ```
+
+## 🤖 Multi-Agent Loop Bootstrap
+
+這個 repo 現在提供最小可用的 human-in-the-loop 協作基礎設施：
+
+- `research/strategy_spec.md`: strategy-agent 的規格與 human decision checkpoint
+- `research/implementation_note.md`: engineer-agent 的實作記錄
+- `research/backtest_report.md` 與 `research/backtest_report.json`: backtest-agent 的標準化輸出
+- `research/iteration_log.md`: 每輪 loop 的審計軌跡
+- `research_contracts.py`: 共用契約與標準化輸出邏輯
+- `schemas/backtest_report.schema.json`: 機器可驗證的 report schema
+
+初始化 workspace：
+
+```bash
+python scripts/init_agent_workspace.py
+```
+
+初始化 autonomous 任務工作區：
+
+```bash
+python scripts/init_autonomous_task.py \
+    strategy-loop \
+    "Run the human-in-the-loop strategy workflow across multiple sessions" \
+    --goal "Keep research artifacts updated after each iteration"
+```
+
+初始化 deep-research 工作區：
+
+```bash
+python scripts/init_deep_research.py \
+    "btc-mean-reversion" \
+    "Compare candidate mean-reversion strategy families for BTCUSDT 1h" \
+    --dimension "market regime" \
+    --dimension "indicator family" \
+    --dimension "risk controls"
+```
+
+執行標準化 backtest-agent 流程：
+
+```bash
+python scripts/run_agent_backtest.py \
+    --data data/BTCUSDT_1h.csv \
+    --strategy ma_crossover \
+    --iteration 1 \
+    --short-window 20 \
+    --long-window 50 \
+    --execution-price next_open
+```
+
+這個流程會：
+
+- 使用 repo 內既有回測引擎與報表輸出
+- 更新 `research/backtest_report.md`
+- 更新 `research/backtest_report.json`
+- 追加 `research/iteration_log.md`
+- 保留人類決策為是否繼續下一輪的唯一最終判定
+
+建議編排方式：
+
+- `.research/<run>/`: 用於 deep-research 前置調研與候選策略比較
+- `research/`: 用於 canonical strategy loop artifacts
+- `.autonomous/<task>/`: 用於長任務 session 追蹤、handoff 與恢復執行
 
 ## 🔬 參數網格掃描 (Grid Search)
 
@@ -366,253 +429,14 @@ generate_optimization_report(
 ## 🧪 測試
 
 ```bash
-# 執行所有測試
 python -m pytest tests/ -v
-
-# 執行特定模組測試
-python -m pytest tests/test_backtest.py -v
-python -m pytest tests/test_reports.py -v
-python -m pytest tests/test_strategy_rd_workflow.py -v
 ```
-
-### Agentic Loop 自測
-
-若要先驗證 workflow 編排本身，而不是直接打真實 LLM API，可使用：
-
-```bash
-python scripts/debug_agentic_loop.py --scenario first_pass
-python scripts/debug_agentic_loop.py --scenario repair_success
-python scripts/debug_agentic_loop.py --scenario always_fail
-```
-
-用途：
-- `first_pass`: 第一輪即成功
-- `repair_success`: 第一輪故意失敗，第二輪修復成功
-- `always_fail`: 驗證迭代失敗與 artifact 輸出
-
-輸出重點：
-- `reports/debug_loop/iterations/*.py`
-- `reports/debug_loop/iterations/*.raw.txt`
-
-已知限制：
-- 若本機 `pytest` 在 import `pandas` 時出現 `numpy.dtype size changed`，需先修正本機 `numpy/pandas` binary compatibility，再執行完整測試
-
-### 測試覆蓋
-
-| 模組 | 測試檔案 | 測試數 |
-|------|---------|--------|
-| 回測引擎 | `test_backtest.py` | 8 |
-| 報告生成 | `test_reports.py` | 12 |
-| 參數優化 | `test_grid_search.py`, `test_optuna.py` | 15 |
-| Walk-Forward | `test_walk_forward.py` | 4 |
-| Agent | `test_strategy_*.py`, `test_*.py` | 50+ |
-| VSS 模組 | `test_vss_*.py` | 40+ |
-| Alignment | `test_alignment_*.py` | 30+ |
-
-**結果**: 296 passed, 3 skipped
 
 ## 📝 設計取捨說明
 
 1. **不回測最優化**：第一階段專注在骨架建立，暫不實作複雜的參數優化
 2. **撮合邏輯簡化**：使用收盤價或下一根開盤價模擬交易
 3. **僅支援 Long 方向**：均線策略只實作做多，未來可擴充做空
-
-## 📖 命令總覽
-
-### 數據下載
-
-```bash
-# 下載歷史 K 線數據
-python scripts/download_data.py \
-    --symbol BTCUSDT \
-    --interval 1h \
-    --start 2023-01-01 \
-    --end 2024-01-01 \
-    --output data/BTCUSDT_1h.csv
-
-# 或使用 run_trading_system.py
-python scripts/run_trading_system.py \
-    --download \
-    --symbols BTCUSDT ETHUSDT \
-    --interval 1h \
-    --years 2
-```
-
-### 回測
-
-```bash
-# 簡單回測
-python scripts/run_backtest.py \
-    --data data/BTCUSDT_1h.csv \
-    --strategy ma_crossover \
-    --short-window 20 \
-    --long-window 50 \
-    --initial-capital 10000
-
-# 使用 run_trading_system.py
-python scripts/run_trading_system.py \
-    --backtest \
-    --data data/BTCUSDT_1h.csv \
-    --strategy ma_crossover
-```
-
-### 參數優化
-
-```bash
-# 網格搜索
-python scripts/run_grid_search.py \
-    --data data/BTCUSDT_1h.csv \
-    --short 10,20,30 \
-    --long 50,100,200 \
-    --score sharpe_ratio \
-    --top-k 10
-
-# Optuna 貝葉斯優化
-python scripts/run_optuna.py \
-    --data data/BTCUSDT_1h.csv \
-    --n-trials 100 \
-    --score sharpe_ratio
-```
-
-### Walk-Forward 測試
-
-```bash
-python scripts/run_walk_forward.py \
-    --data data/BTCUSDT_1h.csv \
-    --train-bars 2000 \
-    --test-bars 500 \
-    --step-bars 500 \
-    --strategy ma_crossover
-```
-
-### 報告生成
-
-```python
-from reports import generate_backtest_report
-from data import load_csv
-
-# 載入數據
-price_df = load_csv("data/BTCUSDT_1h.csv")
-
-# 執行回測
-from backtest import run_backtest
-result = run_backtest(...)
-
-# 生成報告（含買賣點位圖 + MA + BBand）
-output = generate_backtest_report(
-    result=result,
-    price_df=price_df,
-    title="BTCUSDT MA Cross Strategy"
-)
-
-# 輸出:
-# {
-#     'equity_curve': 'reports/equity_xxx.png',
-#     'drawdown': 'reports/drawdown_xxx.png',
-#     'trades': 'reports/trades_indicators_xxx.png',  # 含 MA/BBand
-#     'html_report': 'reports/report_xxx.html'
-# }
-```
-
-### 對話式策略開發
-
-```bash
-# 啟動對話式策略開發助手
-python -m agents.conversation
-```
-
-然後用自然語言描述你想開發的策略：
-
-```
-💬 你: 我想做比特幣一小時的短線策略
-
-🤖 明白了！你想要：
-   • 交易對: BTCUSDT
-   • 時間框架: 1h
-   • 策略類型: 均線交叉
-   
-   正在開發策略...
-   📝 策略: BTCUSDT MA策略
-   📊 指標: MA5, MA20, MA60
-   
-   是否繼續？
-   y) 確認，開始回測
-   n) 重新描述
-
-💬 你: y
-
-   🔄 執行回測...
-   📈 評估策略...
-
-╔══════════════════════════════════════════════════════════╗
-║                    📊 回測結果                           ║
-╠══════════════════════════════════════════════════════════╣
-║  Sharpe Ratio:  1.25                                     ║
-║  Max Drawdown:  8.5%                                    ║
-║  Win Rate:      55.0%                                    ║
-║  Total Trades:  150                                     ║
-╠══════════════════════════════════════════════════════════╣
-║  評估結果: PASS - 策略通過評估                            ║
-╚══════════════════════════════════════════════════════════╝
-```
-
-### Agent 策略研發
-
-```python
-# 策略研發閉環 Workflow
-from agents import StrategyRDWorkflow, RDConfig
-
-# 初始化
-config = RDConfig(
-    symbol="BTCUSDT",
-    max_iterations=5,
-)
-workflow = StrategyRDWorkflow(config)
-
-# 執行研發閉環
-result = workflow.run(
-    market_analysis="比特幣處於多頭趨勢",
-    data=price_df,
-)
-
-# 審批策略
-if result.evaluation.score >= 70:
-    workflow.approve_strategy("策略通過")
-else:
-    workflow.reject_strategy("需要優化")
-```
-
-### 多 Agent 協作
-
-```python
-from agents import (
-    StrategyDeveloperAgent,
-    BacktestRunnerAgent,
-    StrategyEvaluatorAgent,
-    ReporterAgent,
-)
-
-# 1. 開發策略
-developer = StrategyDeveloperAgent()
-strategy_spec = developer.develop_strategy("比特幣一小時週期")
-
-# 2. 執行回測
-runner = BacktestRunnerAgent()
-backtest_report = runner.run_backtest(strategy_spec, price_df)
-
-# 3. 評估策略
-evaluator = StrategyEvaluatorAgent()
-evaluation = evaluator.evaluate(backtest_report)
-
-# 4. 生成報告
-reporter = ReporterAgent()
-report = reporter.generate_report(
-    market_analysis="...",
-    strategy_spec=strategy_spec,
-    backtest_report=backtest_report,
-    evaluation=evaluation,
-)
-```
 
 ## 🔮 未來擴充方向
 
