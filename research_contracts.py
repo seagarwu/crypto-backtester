@@ -180,6 +180,8 @@ class ResearchArtifactWriter:
         command: str,
         status: str,
         notes: Optional[Iterable[str]] = None,
+        dataset_metadata: Optional[Dict[str, Any]] = None,
+        human_decision: Optional[Any] = None,
     ) -> Dict[str, Path]:
         notes_list = [str(item) for item in (notes or [])]
         report_md = self._render_backtest_report_md(
@@ -189,6 +191,8 @@ class ResearchArtifactWriter:
             command=command,
             status=status,
             notes=notes_list,
+            dataset_metadata=dataset_metadata or {},
+            human_decision=human_decision,
         )
         report_json = self._render_backtest_report_json(
             iteration=iteration,
@@ -198,6 +202,8 @@ class ResearchArtifactWriter:
             command=command,
             status=status,
             notes=notes_list,
+            dataset_metadata=dataset_metadata or {},
+            human_decision=human_decision,
         )
         return {
             "markdown": _write_text(self.research_dir / "backtest_report.md", report_md),
@@ -218,6 +224,7 @@ class ResearchArtifactWriter:
         strategy_recommendation: str,
         human_decision: Optional[Any],
         next_action: str,
+        dataset_metadata: Optional[Dict[str, Any]] = None,
     ) -> Path:
         path = self.research_dir / "iteration_log.md"
         if not path.exists():
@@ -226,6 +233,9 @@ class ResearchArtifactWriter:
         if hasattr(action, "value"):
             action = action.value
         rationale = getattr(human_decision, "rationale", "")
+        dataset_metadata = dataset_metadata or {}
+        dataset_summary = dataset_metadata.get("summary", "")
+        override_summary = dataset_metadata.get("override_summary", "")
         entry = "\n".join(
             [
                 "",
@@ -237,6 +247,8 @@ class ResearchArtifactWriter:
                 f"- MDD: {'' if max_drawdown is None else max_drawdown}",
                 f"- Strategy recommendation: {strategy_recommendation}",
                 f"- Human decision: {action or 'pending'}{f' | {rationale}' if rationale else ''}",
+                f"- Dataset used: {dataset_summary or 'unknown'}",
+                f"- Effective overrides: {override_summary or 'none'}",
                 f"- Next action: {next_action}",
                 "",
             ]
@@ -253,15 +265,25 @@ class ResearchArtifactWriter:
         command: str,
         status: str,
         notes: Iterable[str],
+        dataset_metadata: Dict[str, Any],
+        human_decision: Optional[Any],
     ) -> str:
         config = getattr(backtest_report, "config", None)
         run_timestamp = datetime.now().isoformat(timespec="seconds")
+        action = getattr(human_decision, "action", "")
+        if hasattr(action, "value"):
+            action = action.value
+        override_summary = dataset_metadata.get("override_summary", "")
         lines = [
             "# Backtest Report",
             "",
             f"- Strategy: {_stringify(getattr(strategy_spec, 'name', ''))}",
             f"- Iteration: {iteration}",
             f"- Dataset / symbol / timeframe used: {_stringify(getattr(config, 'symbol', ''))} / {_stringify(getattr(config, 'interval', getattr(strategy_spec, 'timeframe', '')))}",
+            f"- Requested period: {_stringify(getattr(config, 'start_date', ''))} -> {_stringify(getattr(config, 'end_date', ''))}",
+            f"- Effective dataset rows: {_stringify(dataset_metadata.get('row_count', ''))}",
+            f"- Effective dataset window: {_stringify(dataset_metadata.get('actual_start', ''))} -> {_stringify(dataset_metadata.get('actual_end', ''))}",
+            f"- Effective overrides: {_stringify(override_summary) or 'none'}",
             f"- Command executed: {command}",
             f"- Run timestamp: {run_timestamp}",
             f"- Status: {status}",
@@ -285,6 +307,9 @@ class ResearchArtifactWriter:
                 "## Notable Trades Or Failure Modes",
                 *([f"- {item}" for item in notes] or ["- None"]),
                 "",
+                "## Human Checkpoint",
+                f"- Final action after this iteration: {_stringify(action) or 'pending'}",
+                "",
                 "## Interpretation Limits",
                 f"- Evaluation status: {_stringify(status)}",
                 "",
@@ -301,8 +326,13 @@ class ResearchArtifactWriter:
         command: str,
         status: str,
         notes: Iterable[str],
+        dataset_metadata: Dict[str, Any],
+        human_decision: Optional[Any],
     ) -> Dict[str, Any]:
         config = getattr(backtest_report, "config", None)
+        action = getattr(human_decision, "action", "")
+        if hasattr(action, "value"):
+            action = action.value
         return {
             "strategy_name": _stringify(getattr(strategy_spec, "name", "")),
             "iteration": iteration,
@@ -311,6 +341,11 @@ class ResearchArtifactWriter:
             "timeframe": _stringify(getattr(config, "interval", getattr(strategy_spec, "timeframe", ""))),
             "period_start": _stringify(getattr(config, "start_date", "")),
             "period_end": _stringify(getattr(config, "end_date", "")),
+            "dataset_row_count": _to_serializable(dataset_metadata.get("row_count")),
+            "dataset_actual_start": _to_serializable(dataset_metadata.get("actual_start")),
+            "dataset_actual_end": _to_serializable(dataset_metadata.get("actual_end")),
+            "dataset_summary": _to_serializable(dataset_metadata.get("summary")),
+            "effective_overrides": _to_serializable(dataset_metadata.get("overrides", {})),
             "net_return_pct": _to_serializable(getattr(backtest_report, "total_return", 0)),
             "max_drawdown_pct": _to_serializable(getattr(backtest_report, "max_drawdown", 0)),
             "sharpe": _to_serializable(getattr(backtest_report, "sharpe_ratio", None)),
@@ -321,4 +356,5 @@ class ResearchArtifactWriter:
             "notes": list(notes),
             "command": command,
             "evaluation": _to_serializable(evaluation) if evaluation is not None else None,
+            "human_decision": _stringify(action),
         }

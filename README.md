@@ -193,6 +193,10 @@ python scripts/run_agent_backtest.py \
 - `research/`: 用於 canonical strategy loop artifacts
 - `.autonomous/<task>/`: 用於長任務 session 追蹤、handoff 與恢復執行
 
+如果你想把這套 agent 治理方式搬到其他 repo，可參考：
+
+- [docs/AGENT_GOVERNANCE_TEMPLATE.md](docs/AGENT_GOVERNANCE_TEMPLATE.md)
+
 ## 🔬 參數網格掃描 (Grid Search)
 
 ### 使用腳本

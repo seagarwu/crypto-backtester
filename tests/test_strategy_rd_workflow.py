@@ -385,6 +385,9 @@ class TestStrategyRDWorkflow:
 
         assert workflow.iterations[0]["human_decision"].config_overrides["interval"] == "30m"
         assert workflow.config.interval == "30m"
+        assert workflow.iterations[0]["dataset_metadata"]["row_count"] == 120
+        assert "rows=120" in workflow.iterations[0]["dataset_metadata"]["summary"]
+        assert workflow.iterations[0]["dataset_metadata"]["override_summary"] == "interval=30m"
 
 
 class FakeBacktester:

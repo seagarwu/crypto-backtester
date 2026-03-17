@@ -180,6 +180,41 @@ class StrategyRDWorkflow:
         self.pending_human_decision: Optional[HumanDecision] = None
         self.research_writer = ResearchArtifactWriter(self.config.research_dir)
         self.research_writer.ensure_workspace()
+
+    def _collect_dataset_metadata(self, backtest_config: BacktestConfig) -> Dict[str, Any]:
+        data = self.backtester.load_data(
+            backtest_config.symbol,
+            backtest_config.interval,
+            backtest_config.start_date,
+            backtest_config.end_date,
+        )
+        actual_start = ""
+        actual_end = ""
+        row_count = 0
+        if data is not None and not data.empty:
+            row_count = int(len(data))
+            if "datetime" in data.columns:
+                actual_start = data["datetime"].min()
+                actual_end = data["datetime"].max()
+        return {
+            "symbol": backtest_config.symbol,
+            "interval": backtest_config.interval,
+            "requested_start": backtest_config.start_date,
+            "requested_end": backtest_config.end_date,
+            "row_count": row_count,
+            "actual_start": actual_start,
+            "actual_end": actual_end,
+            "summary": (
+                f"{backtest_config.symbol} {backtest_config.interval} "
+                f"rows={row_count} "
+                f"window={actual_start or 'n/a'} -> {actual_end or 'n/a'}"
+            ),
+        }
+
+    def _format_override_summary(self, overrides: Dict[str, Any]) -> str:
+        if not overrides:
+            return "none"
+        return ", ".join(f"{key}={value}" for key, value in sorted(overrides.items()))
     
     def run(
         self,
@@ -350,6 +385,13 @@ class StrategyRDWorkflow:
                 end_date=self.config.end_date,
                 initial_capital=self.config.initial_capital,
             )
+            dataset_metadata = self._collect_dataset_metadata(backtest_config)
+            logger.info("   數據筆數: %s", dataset_metadata["row_count"])
+            logger.info(
+                "   數據區間: %s -> %s",
+                dataset_metadata["actual_start"] or "n/a",
+                dataset_metadata["actual_end"] or "n/a",
+            )
             
             try:
                 backtest_report = self.backtester.run_backtest(
@@ -415,6 +457,7 @@ class StrategyRDWorkflow:
                 'strategy': strategy,
                 'code_result': code_result,
                 'validation': validation,
+                'dataset_metadata': dataset_metadata,
                 'backtest_report': backtest_report,
                 'evaluation': evaluation,
                 'report': report,
@@ -445,6 +488,8 @@ class StrategyRDWorkflow:
             self.pending_human_decision = human_decision
             self._apply_config_overrides(human_decision)
             self._apply_human_decision(report, human_decision)
+            dataset_metadata["overrides"] = dict(human_decision.config_overrides or {})
+            dataset_metadata["override_summary"] = self._format_override_summary(dataset_metadata["overrides"])
             self.research_writer.write_strategy_spec(
                 strategy_spec=strategy,
                 iteration=iteration,
@@ -461,6 +506,8 @@ class StrategyRDWorkflow:
                 command=self._backtest_command_hint(strategy.name),
                 status="success",
                 notes=list(getattr(evaluation, "weaknesses", []) or []),
+                dataset_metadata=dataset_metadata,
+                human_decision=human_decision,
             )
             self.research_writer.append_iteration_log(
                 iteration=iteration,
@@ -472,6 +519,7 @@ class StrategyRDWorkflow:
                 strategy_recommendation=proposed_action.value,
                 human_decision=human_decision,
                 next_action=human_decision.action.value,
+                dataset_metadata=dataset_metadata,
             )
 
             logger.info(
@@ -479,6 +527,11 @@ class StrategyRDWorkflow:
                 human_decision.action.value,
                 f" | {human_decision.rationale}" if human_decision.rationale else "",
             )
+            if human_decision.config_overrides:
+                logger.info(
+                    "   生效 override: %s",
+                    self._format_override_summary(human_decision.config_overrides),
+                )
 
             if human_decision.action in (HumanDecisionAction.ACCEPT, HumanDecisionAction.STOP):
                 logger.info("\n🛑 依 human decision 結束當前策略 loop")
@@ -995,6 +1048,18 @@ class {class_name}(BaseStrategy):
             command=self._backtest_command_hint(strategy.name),
             status=backtest_status,
             notes=list(validation.issues or []),
+            dataset_metadata={
+                "symbol": self.config.symbol,
+                "interval": self.config.interval,
+                "requested_start": self.config.start_date,
+                "requested_end": self.config.end_date,
+                "summary": (
+                    f"{self.config.symbol} {self.config.interval} "
+                    f"requested={self.config.start_date} -> {self.config.end_date}"
+                ),
+                "override_summary": "none",
+            },
+            human_decision=None,
         )
         self.research_writer.append_iteration_log(
             iteration=iteration,
@@ -1006,6 +1071,17 @@ class {class_name}(BaseStrategy):
             strategy_recommendation=HumanDecisionAction.REVISE.value,
             human_decision=None,
             next_action=next_action,
+            dataset_metadata={
+                "symbol": self.config.symbol,
+                "interval": self.config.interval,
+                "requested_start": self.config.start_date,
+                "requested_end": self.config.end_date,
+                "summary": (
+                    f"{self.config.symbol} {self.config.interval} "
+                    f"requested={self.config.start_date} -> {self.config.end_date}"
+                ),
+                "override_summary": "none",
+            },
         )
 
     def _propose_next_action(self, evaluation) -> HumanDecisionAction:

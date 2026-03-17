@@ -103,14 +103,27 @@ class TestResearchArtifactWriter:
             command="workflow.run_backtest strategy=Demo Strategy",
             status="success",
             notes=["Trade count still modest"],
+            dataset_metadata={
+                "row_count": 1234,
+                "actual_start": "2024-01-01T00:00:00",
+                "actual_end": "2024-12-31T23:00:00",
+                "summary": "BTCUSDT 1h rows=1234 window=2024-01-01T00:00:00 -> 2024-12-31T23:00:00",
+                "overrides": {"interval": "1h"},
+                "override_summary": "interval=1h",
+            },
+            human_decision=build_decision(),
         )
 
         md_content = paths["markdown"].read_text(encoding="utf-8")
         json_content = json.loads(paths["json"].read_text(encoding="utf-8"))
 
         assert "Status: success" in md_content
+        assert "Effective dataset rows: 1234" in md_content
+        assert "Effective overrides: interval=1h" in md_content
         assert json_content["strategy_name"] == "Demo Strategy"
         assert json_content["net_return_pct"] == 12.5
+        assert json_content["dataset_row_count"] == 1234
+        assert json_content["effective_overrides"] == {"interval": "1h"}
         assert json_content["notes"] == ["Trade count still modest"]
 
     def test_append_iteration_log_records_human_decision(self, tmp_path):
@@ -127,11 +140,17 @@ class TestResearchArtifactWriter:
             strategy_recommendation="continue",
             human_decision=build_decision(),
             next_action="continue",
+            dataset_metadata={
+                "summary": "BTCUSDT 1h rows=120 window=2024-01-01T00:00:00 -> 2024-01-05T23:00:00",
+                "override_summary": "interval=30m",
+            },
         )
 
         content = path.read_text(encoding="utf-8")
         assert "## Iteration 1" in content
         assert "Human decision: continue | Need more robustness checks" in content
+        assert "Dataset used: BTCUSDT 1h rows=120 window=2024-01-01T00:00:00 -> 2024-01-05T23:00:00" in content
+        assert "Effective overrides: interval=30m" in content
 
     def test_write_implementation_note_keeps_validation_summary(self, tmp_path):
         writer = ResearchArtifactWriter(str(tmp_path / "research"))

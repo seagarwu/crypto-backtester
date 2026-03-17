@@ -36,15 +36,26 @@ ENV/
 .coverage
 htmlcov/
 
-# Data (keep data directory but ignore contents)
+# Data (keep data directory but ignore runtime contents)
 data/*.csv
+data/**/*.csv
+data/**/*.json
+data/**/*.bak
 !data/.gitkeep
 
-# Reports (ignore generated reports)
+# Reports (ignore generated reports and runtime artifacts)
 reports/*.csv
 reports/*.md
 reports/*.png
 reports/*.html
+reports/**/*.csv
+reports/**/*.md
+reports/**/*.png
+reports/**/*.html
+reports/**/*.txt
+reports/iterations/
+reports/debug_loop/
+reports/test_*/
 !reports/.gitkeep
 
 # Autonomous / deep-research runtime artifacts
