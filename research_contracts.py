@@ -73,6 +73,7 @@ class ResearchArtifactWriter:
             "backtest_report_json": self.research_dir / "backtest_report.json",
             "iteration_log": self.research_dir / "iteration_log.md",
             "engineer_attempt_log": self.research_dir / "engineer_attempt_log.json",
+            "engineer_reference_cache": self.research_dir / "engineer_reference_cache.json",
             "strategy_handoff": self.research_dir / "strategy_handoff.json",
             "engineer_handoff": self.research_dir / "engineer_handoff.json",
             "backtest_handoff": self.research_dir / "backtest_handoff.json",
@@ -83,13 +84,24 @@ class ResearchArtifactWriter:
                 continue
             if key == "iteration_log":
                 _write_text(path, "# Iteration Log\n")
-            elif key == "engineer_attempt_log":
+            elif key in {"engineer_attempt_log", "engineer_reference_cache"}:
                 _write_text(path, "[]\n")
             elif path.suffix == ".json":
                 _write_text(path, "{}\n")
             else:
                 _write_text(path, "")
         return files
+
+    def append_engineer_reference(self, reference_entry: Dict[str, Any]) -> Path:
+        path = self.research_dir / "engineer_reference_cache.json"
+        existing = []
+        if path.exists():
+            try:
+                existing = json.loads(path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                existing = []
+        existing.append(_to_serializable(reference_entry))
+        return _write_text(path, json.dumps(existing, ensure_ascii=False, indent=2) + "\n")
 
     def append_engineer_attempt(
         self,

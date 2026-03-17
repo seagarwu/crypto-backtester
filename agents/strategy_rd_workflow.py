@@ -38,6 +38,7 @@ from agents.strategy_developer_agent import (
     EngineerCodeResult,
 )
 from agents.reference_context import (
+    CachedEngineerReferenceProvider,
     CompositeEngineerReferenceProvider,
     EngineerReferenceRequest,
     RepoPatternReferenceProvider,
@@ -170,11 +171,18 @@ class StrategyRDWorkflow:
     
     def __init__(self, config: RDConfig = None):
         self.config = config or RDConfig()
+        self.research_writer = ResearchArtifactWriter(self.config.research_dir)
+        self.research_writer.ensure_workspace()
         
         # 初始化所有 Agents
         self.developer = StrategyDeveloperAgent()
         self.reference_provider = CompositeEngineerReferenceProvider(
-            providers=[RepoPatternReferenceProvider()]
+            providers=[
+                RepoPatternReferenceProvider(),
+                CachedEngineerReferenceProvider(
+                    str(self.research_writer.research_dir / "engineer_reference_cache.json")
+                ),
+            ]
         )
         self.engineer_session = EngineerSessionRunner(
             task=EngineerSessionTask(
@@ -207,8 +215,6 @@ class StrategyRDWorkflow:
         self.current_parent_strategy_id: str = ""
         self.route_decision: Optional[RouteDecision] = None
         self.pending_human_decision: Optional[HumanDecision] = None
-        self.research_writer = ResearchArtifactWriter(self.config.research_dir)
-        self.research_writer.ensure_workspace()
 
     def _collect_dataset_metadata(self, backtest_config: BacktestConfig) -> Dict[str, Any]:
         data = self.backtester.load_data(

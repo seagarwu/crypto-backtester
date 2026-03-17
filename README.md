@@ -142,14 +142,30 @@ export_results(
 - `research/engineer_handoff.json`: engineer -> backtest 的機器可讀交接
 - `research/backtest_handoff.json`: backtest -> evaluator 的機器可讀交接
 - `research/evaluation_handoff.json`: evaluator -> strategy 的機器可讀交接
+- `research/engineer_reference_cache.json`: 外部/人工整理的 engineer 參考摘要快取
 - `research_contracts.py`: 共用契約與標準化輸出邏輯
 - `schemas/backtest_report.schema.json`: 機器可驗證的 report schema
 - `schemas/*_handoff.schema.json`: agent 間 handoff 的 JSON schema
+- `schemas/engineer_reference_cache.schema.json`: engineer 外部參考快取 schema
 
 初始化 workspace：
 
 ```bash
 python scripts/init_agent_workspace.py
+```
+
+加入一筆供 engineer 使用的外部參考摘要：
+
+```bash
+python scripts/add_engineer_reference.py \
+    --name "Example BBand strategy" \
+    --source-type github \
+    --url "https://github.com/example/repo" \
+    --summary "Use as a pattern source for BBand entry/exit structure only." \
+    --tag bband \
+    --tag volume \
+    --pattern multi_timeframe_bband_reversion \
+    --constraint "Rewrite into repo-native BaseStrategy form"
 ```
 
 初始化 autonomous 任務工作區：

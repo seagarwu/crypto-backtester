@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
 
@@ -88,6 +90,57 @@ class RepoPatternReferenceProvider(EngineerReferenceProvider):
         return result
 
 
+class CachedEngineerReferenceProvider(EngineerReferenceProvider):
+    """Read curated external reference summaries from a local cache artifact."""
+
+    provider_name = "reference_cache"
+
+    def __init__(self, cache_path: str):
+        self.cache_path = Path(cache_path)
+
+    def build(self, request: EngineerReferenceRequest) -> Dict[str, Any]:
+        entries = self._load_entries()
+        normalized = {
+            str(indicator).strip().strip("'\"").lower()
+            for indicator in (request.indicators or [])
+            if str(indicator).strip()
+        }
+        matched: List[Dict[str, Any]] = []
+        for entry in entries:
+            tags = {
+                str(tag).strip().strip("'\"").lower()
+                for tag in (entry.get("tags", []) or [])
+                if str(tag).strip()
+            }
+            patterns = {
+                str(pattern).strip().strip("'\"").lower()
+                for pattern in (entry.get("patterns", []) or [])
+                if str(pattern).strip()
+            }
+            if request.route_family and request.route_family.lower() in patterns:
+                matched.append(entry)
+                continue
+            if normalized.intersection(tags) or normalized.intersection(patterns):
+                matched.append(entry)
+
+        return {
+            "provider": self.provider_name,
+            "external_references": matched,
+            "reference_cache_path": str(self.cache_path),
+        }
+
+    def _load_entries(self) -> List[Dict[str, Any]]:
+        if not self.cache_path.exists():
+            return []
+        try:
+            payload = json.loads(self.cache_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return []
+        if isinstance(payload, list):
+            return [dict(item) for item in payload]
+        return []
+
+
 class CompositeEngineerReferenceProvider(EngineerReferenceProvider):
     """Merge multiple controlled reference providers into one payload."""
 
@@ -100,6 +153,7 @@ class CompositeEngineerReferenceProvider(EngineerReferenceProvider):
         combined: Dict[str, Any] = {
             "sources": [],
             "repo_patterns": [],
+            "external_references": [],
             "guardrails": [],
             "repeated_failure_categories": [],
         }
@@ -109,6 +163,7 @@ class CompositeEngineerReferenceProvider(EngineerReferenceProvider):
             payload = provider.build(request)
             combined["sources"].append(provider.provider_name)
             combined["repo_patterns"].extend(payload.get("repo_patterns", []) or [])
+            combined["external_references"].extend(payload.get("external_references", []) or [])
             for guardrail in payload.get("guardrails", []) or []:
                 if guardrail not in seen_guardrails:
                     combined["guardrails"].append(guardrail)
@@ -118,7 +173,7 @@ class CompositeEngineerReferenceProvider(EngineerReferenceProvider):
                     combined["repeated_failure_categories"].append(category)
                     seen_categories.add(category)
             for key, value in payload.items():
-                if key in {"provider", "repo_patterns", "guardrails", "repeated_failure_categories"}:
+                if key in {"provider", "repo_patterns", "external_references", "guardrails", "repeated_failure_categories"}:
                     continue
                 combined[key] = value
         return combined

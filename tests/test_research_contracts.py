@@ -72,6 +72,7 @@ class TestResearchArtifactWriter:
             "backtest_report_json",
             "iteration_log",
             "engineer_attempt_log",
+            "engineer_reference_cache",
             "strategy_handoff",
             "engineer_handoff",
             "backtest_handoff",
@@ -267,6 +268,23 @@ class TestResearchArtifactWriter:
         assert payload[0]["technique"] == "reference_guided_synthesis"
         assert payload[0]["failure_categories"] == ["smoke_backtest"]
         assert payload[0]["reference_context"]["repo_patterns"][0]["pattern"] == "multi_timeframe_bband_reversion"
+
+    def test_append_engineer_reference_appends_curated_reference(self, tmp_path):
+        writer = ResearchArtifactWriter(str(tmp_path / "research"))
+        writer.ensure_workspace()
+
+        path = writer.append_engineer_reference(
+            {
+                "name": "Example Repo",
+                "source_type": "github",
+                "summary": "Use as pattern source only",
+                "tags": ["bband"],
+            }
+        )
+
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        assert payload[0]["name"] == "Example Repo"
+        assert payload[0]["source_type"] == "github"
 
     def test_write_implementation_note_keeps_validation_summary(self, tmp_path):
         writer = ResearchArtifactWriter(str(tmp_path / "research"))
