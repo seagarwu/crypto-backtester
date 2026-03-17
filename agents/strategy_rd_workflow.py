@@ -37,6 +37,11 @@ from agents.strategy_developer_agent import (
     StrategySpec,
     EngineerCodeResult,
 )
+from agents.reference_context import (
+    CompositeEngineerReferenceProvider,
+    EngineerReferenceRequest,
+    RepoPatternReferenceProvider,
+)
 from agents.session_tasks import (
     EngineerFailureCategory,
     EngineerExecutionMode,
@@ -168,6 +173,9 @@ class StrategyRDWorkflow:
         
         # 初始化所有 Agents
         self.developer = StrategyDeveloperAgent()
+        self.reference_provider = CompositeEngineerReferenceProvider(
+            providers=[RepoPatternReferenceProvider()]
+        )
         self.engineer_session = EngineerSessionRunner(
             task=EngineerSessionTask(
                 developer=self.developer,
@@ -282,48 +290,15 @@ class StrategyRDWorkflow:
         feedback: IterationFeedback,
         prior_attempts: List[Dict[str, Any]],
     ) -> Dict[str, Any]:
-        references: List[Dict[str, Any]] = []
-        normalized = self._normalized_indicators(strategy)
-        if {"bband", "volume"}.issubset(normalized):
-            references.append(
-                {
-                    "source": "repo-deterministic-template",
-                    "pattern": "multi_timeframe_bband_reversion",
-                    "why": "Known repo-native BBand + volume pattern with validated BaseStrategy contract.",
-                }
+        return self.reference_provider.build(
+            EngineerReferenceRequest(
+                strategy_name=strategy.name,
+                indicators=list(strategy.indicators or []),
+                feedback=self._feedback_to_dict(feedback),
+                prior_attempts=prior_attempts,
+                route_family=self.route_decision.strategy_family if self.route_decision else "",
             )
-        if "ma" in normalized:
-            references.append(
-                {
-                    "source": "repo-deterministic-template",
-                    "pattern": "ma_crossover",
-                    "why": "Known repo-native moving-average crossover implementation.",
-                }
-            )
-        if feedback.validation_issues:
-            references.append(
-                {
-                    "source": "validation-feedback",
-                    "issues": list(feedback.validation_issues),
-                    "guidance": "Fix validation blockers first; keep implementation small and repo-native.",
-                }
-            )
-        repeated_categories = sorted(
-            {
-                category
-                for attempt in prior_attempts
-                for category in (attempt.get("failure_categories", []) or [])
-            }
         )
-        return {
-            "repo_patterns": references,
-            "repeated_failure_categories": repeated_categories,
-            "guardrails": [
-                "Only use Python stdlib, pandas, numpy, and repo-local modules.",
-                "Return a full BaseStrategy subclass with required_indicators, calculate_signals, and generate_signals.",
-                "Prefer simple repo-native logic over novel dependencies when failures repeat.",
-            ],
-        }
 
     def _select_engineer_technique(
         self,
