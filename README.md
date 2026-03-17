@@ -184,6 +184,15 @@ python scripts/ingest_github_engineer_reference.py \
     --pattern multi_timeframe_bband_reversion
 ```
 
+把本地 skill 的 `SKILL.md` 摘要也導入 cache：
+
+```bash
+python scripts/ingest_skill_engineer_reference.py \
+    /media/nexcom/data/alan/codex-devpack/skills/codex-settings/skills/deep-research/SKILL.md \
+    --tag research \
+    --pattern reference_guided_synthesis
+```
+
 初始化 autonomous 任務工作區：
 
 ```bash
