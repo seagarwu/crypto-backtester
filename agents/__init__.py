@@ -22,10 +22,19 @@ def setup_logging(level: int = logging.INFO):
 logger = setup_logging()
 
 # LangGraph imports
-from langgraph.graph import StateGraph, END
-from langgraph.prebuilt import create_react_agent
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
-from langchain_openrouter import ChatOpenRouter
+try:
+    from langgraph.graph import StateGraph, END
+    from langgraph.prebuilt import create_react_agent
+    from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+    from langchain_openrouter import ChatOpenRouter
+except ModuleNotFoundError:
+    StateGraph = None
+    END = None
+    create_react_agent = None
+    HumanMessage = None
+    AIMessage = None
+    SystemMessage = None
+    ChatOpenRouter = None
 
 # Core imports
 from core.llm_manager import (

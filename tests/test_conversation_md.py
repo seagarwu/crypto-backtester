@@ -212,12 +212,24 @@ class TestMDContextPassing:
             "proposed_action": HumanDecisionAction.REVISE,
         }
 
-        with patch("builtins.input", side_effect=["continue", "keep refining", "reduce drawdown, add stop"]):
+        with patch(
+            "builtins.input",
+            side_effect=[
+                "continue",
+                "keep refining",
+                "reduce drawdown, add stop",
+                "30m",
+                "",
+                "",
+                "",
+            ],
+        ):
             decision = conversation._prompt_human_checkpoint(context)
 
         assert decision.action is HumanDecisionAction.CONTINUE
         assert decision.rationale == "keep refining"
         assert decision.next_focus == ["reduce drawdown", "add stop"]
+        assert decision.config_overrides == {"interval": "30m"}
 
 
 class TestGeneratedStrategyCodeHandling:

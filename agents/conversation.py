@@ -216,11 +216,26 @@ class ConversationalStrategyDeveloper:
         rationale = input("   rationale > ").strip()
         next_focus_raw = input("   next focus（可留白，用逗號分隔）> ").strip()
         next_focus = [item.strip() for item in next_focus_raw.split(",") if item.strip()]
+        override_interval = input("   override interval（可留白，例如 30m）> ").strip()
+        override_symbol = input("   override symbol（可留白，例如 ETHUSDT）> ").strip()
+        override_start = input("   override start date（可留白，例如 2020-01-01）> ").strip()
+        override_end = input("   override end date（可留白，例如 2024-12-31）> ").strip()
+
+        config_overrides = {}
+        if override_interval:
+            config_overrides["interval"] = override_interval
+        if override_symbol:
+            config_overrides["symbol"] = override_symbol
+        if override_start:
+            config_overrides["start_date"] = override_start
+        if override_end:
+            config_overrides["end_date"] = override_end
 
         return HumanDecision(
             action=normalized_action,
             rationale=rationale,
             next_focus=next_focus,
+            config_overrides=config_overrides,
         )
     
     def _extract_python_code(self, content: str) -> str:

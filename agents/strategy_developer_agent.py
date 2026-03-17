@@ -255,6 +255,7 @@ class StrategyDeveloperAgent:
             StrategySpec: 優化後的策略
         """
         llm = self._get_llm()
+        normalized_results = self._normalize_backtest_results(backtest_results)
         
         prompt = f"""
 請根據以下回測結果，優化策略參數：
@@ -268,14 +269,14 @@ class StrategyDeveloperAgent:
 - 出場規則: {strategy.exit_rules}
 
 ## 回測結果
-- 總收益率: {backtest_results.get('total_return', 0):.2f}%
-- Sharpe Ratio: {backtest_results.get('sharpe_ratio', 0):.2f}
-- 最大回撤: {backtest_results.get('max_drawdown', 0):.2f}%
-- 勝率: {backtest_results.get('win_rate', 0):.2f}%
-- 交易次數: {backtest_results.get('total_trades', 0)}
+- 總收益率: {normalized_results.get('total_return', 0):.2f}%
+- Sharpe Ratio: {normalized_results.get('sharpe_ratio', 0):.2f}
+- 最大回撤: {normalized_results.get('max_drawdown', 0):.2f}%
+- 勝率: {normalized_results.get('win_rate', 0):.2f}%
+- 交易次數: {normalized_results.get('total_trades', 0)}
 
 ## 問題診斷
-{self._diagnose_results(backtest_results)}
+{self._diagnose_results(normalized_results)}
 
 ## 輸出格式 (JSON)
 請嚴格以下格式輸出：
@@ -319,6 +320,18 @@ class StrategyDeveloperAgent:
         except Exception as e:
             logger.error(f"策略優化失敗: {e}")
             return strategy
+
+    def _normalize_backtest_results(self, results: Any) -> Dict[str, Any]:
+        if isinstance(results, dict):
+            return results
+        return {
+            "total_return": getattr(results, "total_return", 0),
+            "sharpe_ratio": getattr(results, "sharpe_ratio", 0),
+            "max_drawdown": getattr(results, "max_drawdown", 0),
+            "win_rate": getattr(results, "win_rate", 0),
+            "total_trades": getattr(results, "total_trades", 0),
+            "profit_factor": getattr(results, "profit_factor", 0),
+        }
     
     def _diagnose_results(self, results: Dict[str, Any]) -> str:
         """診斷回測結果"""

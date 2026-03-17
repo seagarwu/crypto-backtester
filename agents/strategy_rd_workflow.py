@@ -121,6 +121,7 @@ class HumanDecision:
     rationale: str = ""
     next_focus: List[str] = field(default_factory=list)
     updated_strategy: Optional[StrategySpec] = None
+    config_overrides: Dict[str, Any] = field(default_factory=dict)
     source: str = "human"
 
 
@@ -442,6 +443,7 @@ class StrategyRDWorkflow:
             )
             self.iterations[-1]["human_decision"] = human_decision
             self.pending_human_decision = human_decision
+            self._apply_config_overrides(human_decision)
             self._apply_human_decision(report, human_decision)
             self.research_writer.write_strategy_spec(
                 strategy_spec=strategy,
@@ -955,6 +957,10 @@ class {class_name}(BaseStrategy):
                 feedback.required_changes.extend(
                     [f"Human priority: {item}" for item in human_decision.next_focus]
                 )
+            if human_decision.config_overrides:
+                feedback.required_changes.extend(
+                    [f"Human config override: {key}={value}" for key, value in human_decision.config_overrides.items()]
+                )
         return feedback
 
     def _acceptance_criteria(self) -> List[str]:
@@ -1068,6 +1074,7 @@ class {class_name}(BaseStrategy):
                 rationale=str(decision.get("rationale", "")),
                 next_focus=list(decision.get("next_focus", []) or []),
                 updated_strategy=updated_strategy if isinstance(updated_strategy, StrategySpec) else None,
+                config_overrides=dict(decision.get("config_overrides", {}) or {}),
                 source=str(decision.get("source", "human")),
             )
 
@@ -1083,6 +1090,13 @@ class {class_name}(BaseStrategy):
         elif decision.action is HumanDecisionAction.STOP:
             report.approved = False
         report.approval_notes = decision.rationale
+
+    def _apply_config_overrides(self, decision: HumanDecision) -> None:
+        overrides = decision.config_overrides or {}
+        allowed_fields = {"symbol", "interval", "start_date", "end_date"}
+        for key, value in overrides.items():
+            if key in allowed_fields and value:
+                setattr(self.config, key, value)
 
     def _feedback_to_dict(self, feedback: IterationFeedback) -> Dict[str, Any]:
         return {
@@ -1226,7 +1240,27 @@ def main():
         rationale = input("> rationale: ").strip()
         next_focus_raw = input("> next focus (comma separated, optional): ").strip()
         next_focus = [item.strip() for item in next_focus_raw.split(",") if item.strip()]
-        return HumanDecision(action=action, rationale=rationale, next_focus=next_focus)
+        override_interval = input("> override interval (optional): ").strip()
+        override_symbol = input("> override symbol (optional): ").strip()
+        override_start = input("> override start date (optional): ").strip()
+        override_end = input("> override end date (optional): ").strip()
+
+        config_overrides = {}
+        if override_interval:
+            config_overrides["interval"] = override_interval
+        if override_symbol:
+            config_overrides["symbol"] = override_symbol
+        if override_start:
+            config_overrides["start_date"] = override_start
+        if override_end:
+            config_overrides["end_date"] = override_end
+
+        return HumanDecision(
+            action=action,
+            rationale=rationale,
+            next_focus=next_focus,
+            config_overrides=config_overrides,
+        )
 
     report = workflow.run(human_decision_provider=prompt_human_checkpoint)
     

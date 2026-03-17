@@ -362,6 +362,30 @@ class TestStrategyRDWorkflow:
         assert workflow.iterations[0]["human_decision"].action is HumanDecisionAction.PIVOT
         assert workflow.iterations[1]["strategy"].name == "Pivoted Strategy"
 
+    def test_run_applies_human_config_overrides_to_following_iteration(self):
+        workflow = StrategyRDWorkflow(RDConfig(max_iterations=2, report_dir="reports/test_human_override"))
+        workflow.backtester = FakeBacktester()
+        workflow.evaluator = FakeNeedsImprovementEvaluator()
+        workflow.reporter = FakeReporter()
+
+        def provider(context):
+            if context["iteration"] == 1:
+                return HumanDecision(
+                    action=HumanDecisionAction.CONTINUE,
+                    rationale="Retry on 30m data",
+                    config_overrides={"interval": "30m"},
+                )
+            return HumanDecision(action=HumanDecisionAction.STOP, rationale="done")
+
+        workflow.run(
+            initial_strategy=build_known_spec(),
+            market_analysis="test",
+            human_decision_provider=provider,
+        )
+
+        assert workflow.iterations[0]["human_decision"].config_overrides["interval"] == "30m"
+        assert workflow.config.interval == "30m"
+
 
 class FakeBacktester:
     def load_data(self, symbol, interval, start_date=None, end_date=None):

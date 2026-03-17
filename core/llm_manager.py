@@ -13,8 +13,15 @@ from dataclasses import dataclass, field
 from enum import Enum
 import os
 
-from langchain_openrouter import ChatOpenRouter
-from langchain_openai import ChatOpenAI
+try:
+    from langchain_openrouter import ChatOpenRouter
+except ModuleNotFoundError:
+    ChatOpenRouter = None
+
+try:
+    from langchain_openai import ChatOpenAI
+except ModuleNotFoundError:
+    ChatOpenAI = None
 
 
 class ModelProvider(Enum):

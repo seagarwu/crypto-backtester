@@ -89,6 +89,22 @@ class TestStrategyDeveloperAgent:
         assert "最大回撤過大" in diagnosis
         assert "交易次數過少" in diagnosis
 
+    def test_normalize_backtest_results_accepts_report_object(self):
+        agent = StrategyDeveloperAgent()
+        report = SimpleNamespace(
+            total_return=12.5,
+            sharpe_ratio=1.2,
+            max_drawdown=18.0,
+            win_rate=46.0,
+            total_trades=40,
+            profit_factor=1.3,
+        )
+
+        normalized = agent._normalize_backtest_results(report)
+
+        assert normalized["total_return"] == 12.5
+        assert normalized["max_drawdown"] == 18.0
+
     def test_extract_strategy_context_prefers_strategy_spec_section(self):
         agent = StrategyDeveloperAgent()
 
