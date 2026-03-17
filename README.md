@@ -72,6 +72,17 @@ pip install -r requirements.txt
 
 若你在本機執行測試時遇到 `numpy.dtype size changed`，通常代表 `numpy/pandas` binary mismatch，請重建虛擬環境或重新安裝上述版本組合。
 
+模型建議：
+
+- 對話 agent 預設仍為 `gemini-3-flash-preview`
+- Engineer agent 預設改為 `gemini-2.5-pro`
+
+你也可以明確覆蓋：
+
+```bash
+ENGINEER_MODEL=gemini-2.5-pro python -m agents.conversation
+```
+
 ### 2. 下載 Binance 歷史資料
 
 ```python

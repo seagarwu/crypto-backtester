@@ -156,7 +156,7 @@ class ConversationalStrategyDeveloper:
             "temperature": temperature,
         }
 
-        self.engineer_model = engineer_model or model
+        self.engineer_model = engineer_model or os.environ.get("ENGINEER_MODEL", "gemini-2.5-pro")
         self.evaluator_model = evaluator_model or model
         self.reporter_model = reporter_model or model
 
@@ -2112,7 +2112,7 @@ def parse_args():
     )
     parser.add_argument(
         "--engineer-model",
-        default=os.environ.get("ENGINEER_MODEL"),
+        default=os.environ.get("ENGINEER_MODEL", "gemini-2.5-pro"),
         help="Engineer Agent 使用的模型，可用 ENGINEER_MODEL 覆蓋",
     )
     parser.add_argument(

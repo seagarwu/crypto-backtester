@@ -42,7 +42,7 @@ class AgentRole(Enum):
 class AgentConfig:
     """Agent 配置"""
     role: AgentRole
-    model: str = "gemini-3-flash-preview"
+    model: str = "gemini-2.5-pro"
     temperature: float = 0.7
     max_tokens: int = 2000
     system_prompt: str = ""
@@ -112,7 +112,7 @@ class StrategyDeveloperAgent:
     
     def __init__(
         self,
-        model: str = "gemini-3-flash-preview",
+        model: str = "gemini-2.5-pro",
         temperature: float = 0.8,
     ):
         self.model = model
@@ -869,7 +869,7 @@ class StrategyName(BaseStrategy):
 
 # 便捷函數
 def create_strategy_developer(
-    model: str = "gemini-3-flash-preview",
+    model: str = "gemini-2.5-pro",
 ) -> StrategyDeveloperAgent:
     """建立策略研發 Agent"""
     return StrategyDeveloperAgent(model=model)
