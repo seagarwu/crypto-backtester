@@ -11,7 +11,7 @@ import tempfile
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from agents.strategy_developer_agent import EngineerCodeResult, StrategyDeveloperAgent, StrategySpec
 
@@ -20,11 +20,26 @@ class EngineerTechnique(Enum):
     DETERMINISTIC_TEMPLATE = "deterministic_template"
     REPO_NATIVE_REPAIR = "repo_native_repair"
     STRUCTURED_GENERATION = "structured_generation"
+    REFERENCE_GUIDED_SYNTHESIS = "reference_guided_synthesis"
+    CONSERVATIVE_FALLBACK = "conservative_fallback"
 
 
 class EngineerExecutionMode(Enum):
     INLINE = "inline"
     SUBPROCESS = "subprocess"
+
+
+class EngineerFailureCategory(Enum):
+    EMPTY_OUTPUT = "empty_output"
+    FORBIDDEN_DEPENDENCY = "forbidden_dependency"
+    SYNTAX = "syntax"
+    IMPORT = "import"
+    STRUCTURE = "structure"
+    INSTANTIATION = "instantiation"
+    SMOKE_BACKTEST = "smoke_backtest"
+    FULL_BACKTEST = "full_backtest"
+    PERFORMANCE = "performance"
+    UNKNOWN = "unknown"
 
 
 @dataclass
@@ -34,6 +49,8 @@ class EngineerSessionInput:
     md_context: Optional[str] = None
     previous_code: str = ""
     feedback: Dict[str, Any] = field(default_factory=dict)
+    reference_context: Dict[str, Any] = field(default_factory=dict)
+    prior_attempts: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_payload(self) -> Dict[str, Any]:
         payload = asdict(self)
@@ -48,6 +65,8 @@ class EngineerSessionInput:
             md_context=payload.get("md_context"),
             previous_code=str(payload.get("previous_code", "")),
             feedback=dict(payload.get("feedback", {}) or {}),
+            reference_context=dict(payload.get("reference_context", {}) or {}),
+            prior_attempts=list(payload.get("prior_attempts", []) or []),
         )
 
 
@@ -58,6 +77,8 @@ class EngineerSessionResult:
     technique: EngineerTechnique
     code_result: EngineerCodeResult
     handoff_payload: Dict[str, Any]
+    reference_context: Dict[str, Any] = field(default_factory=dict)
+    attempt_summary: Dict[str, Any] = field(default_factory=dict)
 
     def to_payload(self) -> Dict[str, Any]:
         return {
@@ -66,6 +87,8 @@ class EngineerSessionResult:
             "technique": self.technique.value,
             "code_result": asdict(self.code_result),
             "handoff_payload": dict(self.handoff_payload),
+            "reference_context": dict(self.reference_context),
+            "attempt_summary": dict(self.attempt_summary),
         }
 
     @classmethod
@@ -76,6 +99,8 @@ class EngineerSessionResult:
             technique=EngineerTechnique(str(payload.get("technique", EngineerTechnique.STRUCTURED_GENERATION.value))),
             code_result=EngineerCodeResult(**dict(payload["code_result"])),
             handoff_payload=dict(payload.get("handoff_payload", {}) or {}),
+            reference_context=dict(payload.get("reference_context", {}) or {}),
+            attempt_summary=dict(payload.get("attempt_summary", {}) or {}),
         )
 
 
@@ -103,18 +128,45 @@ class EngineerSessionTask:
             if self.deterministic_builder is None:
                 raise ValueError("deterministic_builder is required for deterministic_template technique")
             code_result = self.deterministic_builder(strategy_spec)
+        elif session_input.technique is EngineerTechnique.REFERENCE_GUIDED_SYNTHESIS:
+            code_result = self.developer.generate_strategy_code_structured(
+                strategy_spec,
+                md_context=self._merge_context(session_input.md_context, session_input.reference_context),
+                feedback=self._merge_feedback(session_input.feedback, session_input.reference_context, session_input.prior_attempts),
+                previous_code=session_input.previous_code,
+            )
+        elif session_input.technique is EngineerTechnique.CONSERVATIVE_FALLBACK:
+            code_result = self.developer.generate_strategy_code_structured(
+                strategy_spec,
+                md_context=self._merge_context(
+                    session_input.md_context,
+                    {
+                        **session_input.reference_context,
+                        "fallback_guidance": "Prefer the smallest repo-native implementation that satisfies BaseStrategy contracts and avoids advanced multi-timeframe logic.",
+                    },
+                ),
+                feedback=self._merge_feedback(
+                    session_input.feedback,
+                    {
+                        **session_input.reference_context,
+                        "fallback_guidance": "Minimize moving parts. Favor correctness and validation success over feature richness.",
+                    },
+                    session_input.prior_attempts,
+                ),
+                previous_code=session_input.previous_code,
+            )
         elif session_input.previous_code or session_input.feedback:
             code_result = self.developer.revise_strategy_code(
                 strategy_spec,
-                feedback=session_input.feedback,
+                feedback=self._merge_feedback(session_input.feedback, session_input.reference_context, session_input.prior_attempts),
                 previous_code=session_input.previous_code,
-                md_context=session_input.md_context,
+                md_context=self._merge_context(session_input.md_context, session_input.reference_context),
             )
         else:
             code_result = self.developer.generate_strategy_code_structured(
                 strategy_spec,
-                md_context=session_input.md_context,
-                feedback=session_input.feedback,
+                md_context=self._merge_context(session_input.md_context, session_input.reference_context),
+                feedback=self._merge_feedback(session_input.feedback, session_input.reference_context, session_input.prior_attempts),
                 previous_code=session_input.previous_code,
             )
 
@@ -124,6 +176,11 @@ class EngineerSessionTask:
             technique=session_input.technique,
             code_result=code_result,
             handoff_payload=payload,
+            reference_context=session_input.reference_context,
+            attempt_summary={
+                "attempt_count": len(session_input.prior_attempts),
+                "latest_failure_categories": self._latest_failure_categories(session_input.prior_attempts),
+            },
         )
 
     def _load_handoff(self, path: str) -> Dict[str, Any]:
@@ -140,6 +197,35 @@ class EngineerSessionTask:
             timeframe=str(payload.get("timeframe", "1h")),
             risk_level=str(payload.get("risk_level", "medium")),
         )
+
+    def _merge_context(self, md_context: Optional[str], reference_context: Dict[str, Any]) -> Optional[str]:
+        sections: List[str] = []
+        if md_context:
+            sections.append(md_context)
+        if reference_context:
+            sections.append(
+                "Reference guidance:\n"
+                + json.dumps(reference_context, ensure_ascii=False, indent=2)
+            )
+        return "\n\n".join(section for section in sections if section) or None
+
+    def _merge_feedback(
+        self,
+        feedback: Dict[str, Any],
+        reference_context: Dict[str, Any],
+        prior_attempts: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        merged = dict(feedback or {})
+        if reference_context:
+            merged["reference_context"] = reference_context
+        if prior_attempts:
+            merged["prior_attempts"] = prior_attempts
+        return merged
+
+    def _latest_failure_categories(self, prior_attempts: List[Dict[str, Any]]) -> List[str]:
+        if not prior_attempts:
+            return []
+        return list(prior_attempts[-1].get("failure_categories", []) or [])
 
 
 class EngineerSessionRunner:
@@ -208,4 +294,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

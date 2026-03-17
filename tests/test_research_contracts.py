@@ -21,6 +21,7 @@ def build_validation():
     return SimpleNamespace(
         passed=True,
         issues=[],
+        failure_categories=[],
         smoke_metrics={"total_return": 3.2, "max_drawdown": 9.4},
     )
 
@@ -70,6 +71,7 @@ class TestResearchArtifactWriter:
             "backtest_report_md",
             "backtest_report_json",
             "iteration_log",
+            "engineer_attempt_log",
             "strategy_handoff",
             "engineer_handoff",
             "backtest_handoff",
@@ -236,6 +238,35 @@ class TestResearchArtifactWriter:
         assert "Human decision: continue | Need more robustness checks" in content
         assert "Dataset used: BTCUSDT 1h rows=120 window=2024-01-01T00:00:00 -> 2024-01-05T23:00:00" in content
         assert "Effective overrides: interval=30m" in content
+
+    def test_append_engineer_attempt_records_failure_categories_and_reference_context(self, tmp_path):
+        writer = ResearchArtifactWriter(str(tmp_path / "research"))
+        writer.ensure_workspace()
+        validation = SimpleNamespace(
+            passed=False,
+            issues=["Smoke backtest failed: invalid frequency"],
+            failure_categories=["smoke_backtest"],
+        )
+
+        path = writer.append_engineer_attempt(
+            iteration=2,
+            strategy_spec=build_strategy(),
+            technique="reference_guided_synthesis",
+            validation=validation,
+            code_path="reports/iterations/iteration_02_demo.py",
+            identity={
+                "strategy_id": "strat-123",
+                "iteration_id": "iter-002",
+                "parent_strategy_id": "",
+            },
+            reference_context={"repo_patterns": [{"pattern": "multi_timeframe_bband_reversion"}]},
+            attempt_summary={"attempt_count": 1},
+        )
+
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        assert payload[0]["technique"] == "reference_guided_synthesis"
+        assert payload[0]["failure_categories"] == ["smoke_backtest"]
+        assert payload[0]["reference_context"]["repo_patterns"][0]["pattern"] == "multi_timeframe_bband_reversion"
 
     def test_write_implementation_note_keeps_validation_summary(self, tmp_path):
         writer = ResearchArtifactWriter(str(tmp_path / "research"))

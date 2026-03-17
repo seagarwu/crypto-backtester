@@ -18,6 +18,7 @@ from agents.strategy_rd_workflow import (
     HumanDecision,
     HumanDecisionAction,
 )
+from agents.session_tasks import EngineerTechnique
 from agents.strategy_evaluator_agent import EvaluationResult
 from agents.strategy_developer_agent import StrategySpec, EngineerCodeResult
 
@@ -185,6 +186,33 @@ class TestStrategyRDWorkflow:
         assert "Syntax error" in feedback.validation_issues
         assert "Sharpe Ratio 低" in feedback.performance_issues
         assert "降低回撤" in feedback.required_changes
+
+    def test_classify_validation_failure(self):
+        workflow = StrategyRDWorkflow()
+
+        categories = workflow._classify_validation_failure(
+            ["Syntax error: invalid syntax", "Smoke backtest failed: bad freq"]
+        )
+
+        assert "syntax" in categories
+        assert "smoke_backtest" in categories
+
+    def test_select_engineer_technique_uses_reference_guided_after_repeated_failures(self):
+        workflow = StrategyRDWorkflow()
+        spec = StrategySpec(name="Novel", description="x", indicators=["RSI"], parameters={})
+        feedback = IterationFeedback(validation_issues=["Syntax error"])
+
+        technique = workflow._select_engineer_technique(
+            iteration=3,
+            strategy=spec,
+            feedback=feedback,
+            prior_attempts=[
+                {"failure_categories": ["syntax"]},
+                {"failure_categories": ["unknown"]},
+            ],
+        )
+
+        assert technique is EngineerTechnique.REFERENCE_GUIDED_SYNTHESIS
 
     def test_build_iteration_feedback_includes_human_priorities(self):
         workflow = StrategyRDWorkflow()
@@ -395,6 +423,7 @@ class TestStrategyRDWorkflow:
         assert workflow.iterations[0]["identity"]["iteration_id"] != workflow.iterations[1]["identity"]["iteration_id"]
         assert (workflow.research_writer.research_dir / "strategy_handoff.json").exists()
         assert (workflow.research_writer.research_dir / "engineer_handoff.json").exists()
+        assert (workflow.research_writer.research_dir / "engineer_attempt_log.json").exists()
         assert (workflow.research_writer.research_dir / "backtest_handoff.json").exists()
         assert (workflow.research_writer.research_dir / "evaluation_handoff.json").exists()
 

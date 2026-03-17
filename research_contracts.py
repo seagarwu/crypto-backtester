@@ -72,6 +72,7 @@ class ResearchArtifactWriter:
             "backtest_report_md": self.research_dir / "backtest_report.md",
             "backtest_report_json": self.research_dir / "backtest_report.json",
             "iteration_log": self.research_dir / "iteration_log.md",
+            "engineer_attempt_log": self.research_dir / "engineer_attempt_log.json",
             "strategy_handoff": self.research_dir / "strategy_handoff.json",
             "engineer_handoff": self.research_dir / "engineer_handoff.json",
             "backtest_handoff": self.research_dir / "backtest_handoff.json",
@@ -82,11 +83,49 @@ class ResearchArtifactWriter:
                 continue
             if key == "iteration_log":
                 _write_text(path, "# Iteration Log\n")
+            elif key == "engineer_attempt_log":
+                _write_text(path, "[]\n")
             elif path.suffix == ".json":
                 _write_text(path, "{}\n")
             else:
                 _write_text(path, "")
         return files
+
+    def append_engineer_attempt(
+        self,
+        iteration: int,
+        strategy_spec: Any,
+        technique: str,
+        validation: Any,
+        code_path: str,
+        identity: Optional[Dict[str, Any]] = None,
+        reference_context: Optional[Dict[str, Any]] = None,
+        attempt_summary: Optional[Dict[str, Any]] = None,
+    ) -> Path:
+        path = self.research_dir / "engineer_attempt_log.json"
+        existing = []
+        if path.exists():
+            try:
+                existing = json.loads(path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                existing = []
+        existing.append(
+            {
+                "iteration": iteration,
+                "strategy_id": _stringify((identity or {}).get("strategy_id")),
+                "iteration_id": _stringify((identity or {}).get("iteration_id")),
+                "parent_strategy_id": _stringify((identity or {}).get("parent_strategy_id")),
+                "strategy_name": _stringify(getattr(strategy_spec, "name", "")),
+                "technique": technique,
+                "code_path": code_path,
+                "validation_passed": bool(getattr(validation, "passed", False)),
+                "validation_issues": _to_serializable(getattr(validation, "issues", [])),
+                "failure_categories": _to_serializable(getattr(validation, "failure_categories", [])),
+                "reference_context": _to_serializable(reference_context or {}),
+                "attempt_summary": _to_serializable(attempt_summary or {}),
+            }
+        )
+        return _write_text(path, json.dumps(existing, ensure_ascii=False, indent=2) + "\n")
 
     def write_strategy_handoff(
         self,
@@ -242,6 +281,7 @@ class ResearchArtifactWriter:
             "assumptions": _to_serializable(getattr(code_result, "assumptions", [])),
             "validation_passed": bool(getattr(validation, "passed", False)),
             "validation_issues": _to_serializable(getattr(validation, "issues", [])),
+            "failure_categories": _to_serializable(getattr(validation, "failure_categories", [])),
             "smoke_metrics": _to_serializable(getattr(validation, "smoke_metrics", {})),
         }
         return _write_text(

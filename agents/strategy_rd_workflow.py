@@ -38,6 +38,7 @@ from agents.strategy_developer_agent import (
     EngineerCodeResult,
 )
 from agents.session_tasks import (
+    EngineerFailureCategory,
     EngineerExecutionMode,
     EngineerSessionInput,
     EngineerSessionRunner,
@@ -105,6 +106,7 @@ class CodeValidationResult:
     filepath: str = ""
     class_name: str = ""
     issues: List[str] = field(default_factory=list)
+    failure_categories: List[str] = field(default_factory=list)
     smoke_metrics: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -252,6 +254,100 @@ class StrategyRDWorkflow:
             "parent_strategy_id": self.current_parent_strategy_id,
             "iteration": iteration,
         }
+
+    def _classify_validation_failure(self, issues: List[str]) -> List[str]:
+        categories: List[str] = []
+        issue_text = " | ".join(issues or []).lower()
+        mapping = [
+            ("no code generated", EngineerFailureCategory.EMPTY_OUTPUT),
+            ("forbidden dependency", EngineerFailureCategory.FORBIDDEN_DEPENDENCY),
+            ("syntax error", EngineerFailureCategory.SYNTAX),
+            ("import failed", EngineerFailureCategory.IMPORT),
+            ("subclass found", EngineerFailureCategory.STRUCTURE),
+            ("missing 'signal' column", EngineerFailureCategory.STRUCTURE),
+            ("instantiation failed", EngineerFailureCategory.INSTANTIATION),
+            ("smoke backtest failed", EngineerFailureCategory.SMOKE_BACKTEST),
+            ("full backtest failed", EngineerFailureCategory.FULL_BACKTEST),
+        ]
+        for needle, category in mapping:
+            if needle in issue_text and category.value not in categories:
+                categories.append(category.value)
+        if not categories and issues:
+            categories.append(EngineerFailureCategory.UNKNOWN.value)
+        return categories
+
+    def _build_reference_context(
+        self,
+        strategy: StrategySpec,
+        feedback: IterationFeedback,
+        prior_attempts: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        references: List[Dict[str, Any]] = []
+        normalized = self._normalized_indicators(strategy)
+        if {"bband", "volume"}.issubset(normalized):
+            references.append(
+                {
+                    "source": "repo-deterministic-template",
+                    "pattern": "multi_timeframe_bband_reversion",
+                    "why": "Known repo-native BBand + volume pattern with validated BaseStrategy contract.",
+                }
+            )
+        if "ma" in normalized:
+            references.append(
+                {
+                    "source": "repo-deterministic-template",
+                    "pattern": "ma_crossover",
+                    "why": "Known repo-native moving-average crossover implementation.",
+                }
+            )
+        if feedback.validation_issues:
+            references.append(
+                {
+                    "source": "validation-feedback",
+                    "issues": list(feedback.validation_issues),
+                    "guidance": "Fix validation blockers first; keep implementation small and repo-native.",
+                }
+            )
+        repeated_categories = sorted(
+            {
+                category
+                for attempt in prior_attempts
+                for category in (attempt.get("failure_categories", []) or [])
+            }
+        )
+        return {
+            "repo_patterns": references,
+            "repeated_failure_categories": repeated_categories,
+            "guardrails": [
+                "Only use Python stdlib, pandas, numpy, and repo-local modules.",
+                "Return a full BaseStrategy subclass with required_indicators, calculate_signals, and generate_signals.",
+                "Prefer simple repo-native logic over novel dependencies when failures repeat.",
+            ],
+        }
+
+    def _select_engineer_technique(
+        self,
+        iteration: int,
+        strategy: StrategySpec,
+        feedback: IterationFeedback,
+        prior_attempts: List[Dict[str, Any]],
+    ) -> EngineerTechnique:
+        repeated_categories = [
+            category
+            for attempt in prior_attempts
+            for category in (attempt.get("failure_categories", []) or [])
+        ]
+        repeated_smoke = repeated_categories.count(EngineerFailureCategory.SMOKE_BACKTEST.value)
+        repeated_syntax = repeated_categories.count(EngineerFailureCategory.SYNTAX.value)
+        if self.route_decision and self.route_decision.route in (StrategyRoute.KNOWN, StrategyRoute.COMPOSABLE):
+            return EngineerTechnique.DETERMINISTIC_TEMPLATE
+        if repeated_smoke >= 2:
+            return EngineerTechnique.CONSERVATIVE_FALLBACK
+        if repeated_syntax >= 1 or len(prior_attempts) >= 2:
+            return EngineerTechnique.REFERENCE_GUIDED_SYNTHESIS
+        if iteration == 1 or not self.current_code:
+            return EngineerTechnique.STRUCTURED_GENERATION
+        return EngineerTechnique.REPO_NATIVE_REPAIR
     
     def run(
         self,
@@ -352,16 +448,18 @@ class StrategyRDWorkflow:
                 evaluation=self.iterations[-1]["evaluation"] if self.iterations else None,
                 human_decision=self.pending_human_decision,
             )
+            prior_attempts = [
+                item.get("engineer_attempt", {})
+                for item in self.iterations
+                if item.get("engineer_attempt")
+            ]
+            reference_context = self._build_reference_context(strategy, feedback, prior_attempts)
 
             logger.info("\n[2/5] Engineer Agent 生成/修正策略代碼...")
-            if self.route_decision and self.route_decision.route in (StrategyRoute.KNOWN, StrategyRoute.COMPOSABLE):
-                technique = EngineerTechnique.DETERMINISTIC_TEMPLATE
-                if iteration > 1 and self.current_code:
-                    logger.info("   使用 deterministic route 重新生成代碼，不走自由修補")
-            elif iteration == 1 or not self.current_code:
-                technique = EngineerTechnique.STRUCTURED_GENERATION
-            else:
-                technique = EngineerTechnique.REPO_NATIVE_REPAIR
+            technique = self._select_engineer_technique(iteration, strategy, feedback, prior_attempts)
+            if technique is EngineerTechnique.DETERMINISTIC_TEMPLATE and iteration > 1 and self.current_code:
+                logger.info("   使用 deterministic route 重新生成代碼，不走自由修補")
+            logger.info("   技法: %s", technique.value)
 
             session_result = self.engineer_session.run(
                 EngineerSessionInput(
@@ -370,6 +468,8 @@ class StrategyRDWorkflow:
                     md_context=md_context,
                     previous_code=self.current_code,
                     feedback=self._feedback_to_dict(feedback),
+                    reference_context=reference_context,
+                    prior_attempts=prior_attempts,
                 ),
                 mode=EngineerExecutionMode(self.config.engineer_execution_mode),
             )
@@ -408,6 +508,22 @@ class StrategyRDWorkflow:
                 code_path=str(code_path),
                 identity=identity,
             )
+            engineer_attempt = {
+                "technique": technique.value,
+                "failure_categories": list(validation.failure_categories),
+                "reference_context": reference_context,
+                "attempt_summary": session_result.attempt_summary,
+            }
+            self.research_writer.append_engineer_attempt(
+                iteration=iteration,
+                strategy_spec=strategy,
+                technique=technique.value,
+                validation=validation,
+                code_path=str(code_path),
+                identity=identity,
+                reference_context=reference_context,
+                attempt_summary=session_result.attempt_summary,
+            )
 
             if not validation.passed:
                 logger.warning("   代碼驗證失敗，進入下一輪修正")
@@ -419,6 +535,7 @@ class StrategyRDWorkflow:
                     "strategy": strategy,
                     "code_result": code_result,
                     "validation": validation,
+                    "engineer_attempt": engineer_attempt,
                     "evaluation": None,
                     "report": None,
                     "human_decision": None,
@@ -465,12 +582,14 @@ class StrategyRDWorkflow:
             except Exception as e:
                 logger.error(f"   回測失敗: {e}")
                 validation.issues.append(f"Full backtest failed: {e}")
+                validation.failure_categories = self._classify_validation_failure(validation.issues)
                 self.iterations.append({
                     "iteration": iteration,
                     "identity": identity,
                     "strategy": strategy,
                     "code_result": code_result,
                     "validation": validation,
+                    "engineer_attempt": engineer_attempt,
                     "evaluation": None,
                     "report": None,
                     "human_decision": None,
@@ -522,6 +641,7 @@ class StrategyRDWorkflow:
                 'strategy': strategy,
                 'code_result': code_result,
                 'validation': validation,
+                'engineer_attempt': engineer_attempt,
                 'dataset_metadata': dataset_metadata,
                 'backtest_report': backtest_report,
                 'evaluation': evaluation,
@@ -980,7 +1100,7 @@ class {class_name}(BaseStrategy):
         code = Path(filepath).read_text(encoding="utf-8")
         if not code.strip():
             issues.append("No code generated")
-            return CodeValidationResult(False, filepath=filepath, issues=issues)
+            return CodeValidationResult(False, filepath=filepath, issues=issues, failure_categories=self._classify_validation_failure(issues))
 
         forbidden_imports = {
             "pandas_ta": "Forbidden dependency 'pandas_ta' is not available in this project",
@@ -992,31 +1112,31 @@ class {class_name}(BaseStrategy):
             if f"import {module_name}" in code or f"from {module_name} " in code:
                 issues.append(message)
         if issues:
-            return CodeValidationResult(False, filepath=filepath, issues=issues)
+            return CodeValidationResult(False, filepath=filepath, issues=issues, failure_categories=self._classify_validation_failure(issues))
 
         try:
             ast.parse(code)
         except SyntaxError as exc:
             issues.append(f"Syntax error: {exc}")
-            return CodeValidationResult(False, filepath=filepath, issues=issues)
+            return CodeValidationResult(False, filepath=filepath, issues=issues, failure_categories=self._classify_validation_failure(issues))
 
         try:
             strategy_class = self._load_strategy_class(filepath)
         except ModuleNotFoundError as exc:
             issues.append(f"Strategy import failed: missing dependency '{exc.name}'")
-            return CodeValidationResult(False, filepath=filepath, issues=issues)
+            return CodeValidationResult(False, filepath=filepath, issues=issues, failure_categories=self._classify_validation_failure(issues))
         except Exception as exc:
             issues.append(f"Strategy import failed: {exc}")
-            return CodeValidationResult(False, filepath=filepath, issues=issues)
+            return CodeValidationResult(False, filepath=filepath, issues=issues, failure_categories=self._classify_validation_failure(issues))
         if strategy_class is None:
             issues.append("No BaseStrategy subclass found")
-            return CodeValidationResult(False, filepath=filepath, issues=issues)
+            return CodeValidationResult(False, filepath=filepath, issues=issues, failure_categories=self._classify_validation_failure(issues))
 
         try:
             strategy = self._instantiate_strategy(strategy_class, strategy_spec.parameters)
         except Exception as exc:
             issues.append(f"Strategy instantiation failed: {exc}")
-            return CodeValidationResult(False, filepath=filepath, class_name=strategy_class.__name__, issues=issues)
+            return CodeValidationResult(False, filepath=filepath, class_name=strategy_class.__name__, issues=issues, failure_categories=self._classify_validation_failure(issues))
 
         try:
             sample_data = self.backtester.load_data(
@@ -1028,7 +1148,7 @@ class {class_name}(BaseStrategy):
             signals = strategy.generate_signals(sample_data)
             if "signal" not in signals.columns:
                 issues.append("Generated signals missing 'signal' column")
-                return CodeValidationResult(False, filepath=filepath, class_name=strategy_class.__name__, issues=issues)
+                return CodeValidationResult(False, filepath=filepath, class_name=strategy_class.__name__, issues=issues, failure_categories=self._classify_validation_failure(issues))
 
             engine = create_backtest_runner(self.config.data_dir)
             smoke_report = engine.run_backtest(
@@ -1051,7 +1171,7 @@ class {class_name}(BaseStrategy):
             }
         except Exception as exc:
             issues.append(f"Smoke backtest failed: {exc}")
-            return CodeValidationResult(False, filepath=filepath, class_name=strategy_class.__name__, issues=issues)
+            return CodeValidationResult(False, filepath=filepath, class_name=strategy_class.__name__, issues=issues, failure_categories=self._classify_validation_failure(issues))
 
         return CodeValidationResult(
             passed=True,

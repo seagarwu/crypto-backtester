@@ -59,6 +59,7 @@ class TestEngineerSessionTask:
         assert result.technique is EngineerTechnique.STRUCTURED_GENERATION
         assert result.code_result.summary == "generated"
         assert developer.calls[0][0] == "generate"
+        assert result.attempt_summary["attempt_count"] == 0
 
     def test_run_uses_revision_when_previous_code_or_feedback_exists(self, tmp_path):
         handoff = tmp_path / "strategy_handoff.json"
@@ -150,6 +151,8 @@ class TestEngineerSessionTask:
             technique=EngineerTechnique.STRUCTURED_GENERATION,
             code_result=EngineerCodeResult(code="print('x')", summary="ok", assumptions=["a"], raw_response="raw"),
             handoff_payload={"strategy_name": "Demo Strategy"},
+            reference_context={"repo_patterns": [{"pattern": "demo"}]},
+            attempt_summary={"attempt_count": 2},
         )
 
         restored = EngineerSessionResult.from_payload(result.to_payload())
@@ -157,6 +160,48 @@ class TestEngineerSessionTask:
         assert restored.identity["strategy_id"] == "strat-123"
         assert restored.code_result.raw_response == "raw"
         assert restored.strategy_spec.name == "Demo Strategy"
+        assert restored.reference_context["repo_patterns"][0]["pattern"] == "demo"
+        assert restored.attempt_summary["attempt_count"] == 2
+
+    def test_reference_guided_synthesis_merges_reference_context_into_feedback(self, tmp_path):
+        handoff = tmp_path / "strategy_handoff.json"
+        handoff.write_text(
+            json.dumps(
+                {
+                    "handoff_type": "strategy_to_engineer",
+                    "strategy_id": "strat-123",
+                    "iteration_id": "iter-005",
+                    "parent_strategy_id": "",
+                    "iteration": 5,
+                    "strategy_name": "Demo Strategy",
+                    "description": "desc",
+                    "indicators": ["BBand"],
+                    "entry_rules": "buy",
+                    "exit_rules": "sell",
+                    "parameters": {"bb_period": 20},
+                    "timeframe": "1h",
+                    "risk_level": "medium",
+                }
+            ),
+            encoding="utf-8",
+        )
+        developer = FakeDeveloper()
+        task = EngineerSessionTask(developer=developer)
+
+        result = task.run(
+            EngineerSessionInput(
+                strategy_handoff_path=str(handoff),
+                technique=EngineerTechnique.REFERENCE_GUIDED_SYNTHESIS,
+                reference_context={"repo_patterns": [{"pattern": "bband_reversion"}]},
+                prior_attempts=[{"failure_categories": ["syntax"]}],
+            )
+        )
+
+        _, _, md_context, feedback, _ = developer.calls[0]
+        assert "Reference guidance" in md_context
+        assert feedback["reference_context"]["repo_patterns"][0]["pattern"] == "bband_reversion"
+        assert feedback["prior_attempts"][0]["failure_categories"] == ["syntax"]
+        assert result.attempt_summary["latest_failure_categories"] == ["syntax"]
 
     def test_runner_subprocess_mode_reads_written_result(self, tmp_path, monkeypatch):
         handoff = tmp_path / "strategy_handoff.json"
