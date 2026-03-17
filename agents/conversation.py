@@ -38,8 +38,12 @@ from agents.strategy_evaluator_agent import (
     create_strategy_evaluator,
 )
 from agents.reporter_agent import ReporterAgent
-from agents.strategy_rd_workflow import StrategyRDWorkflow, RDConfig
-from reports import generate_backtest_report
+from agents.strategy_rd_workflow import (
+    StrategyRDWorkflow,
+    RDConfig,
+    HumanDecision,
+    HumanDecisionAction,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -177,6 +181,47 @@ class ConversationalStrategyDeveloper:
         
         # 確保有過討論才能執行
         self._has_discussed = False  # 必須經過 LLM 回應一輪
+
+    def _prompt_human_checkpoint(self, context: Dict[str, Any]) -> HumanDecision:
+        """在每輪回測後詢問 human checkpoint，決定是否繼續 loop。"""
+        report = context["report"]
+        proposed_action = context["proposed_action"]
+
+        print("\n" + "=" * 60)
+        print("🧑 Human Checkpoint")
+        print("=" * 60)
+        print(f"   策略: {report.strategy_name}")
+        print(f"   收益率: {report.total_return:.2f}%")
+        print(f"   Sharpe: {report.sharpe_ratio:.2f}")
+        print(f"   回撤: {report.max_drawdown:.2f}%")
+        print(f"   勝率: {report.win_rate:.2f}%")
+        print(f"   Agent 建議: {proposed_action.value}")
+        print("""
+   請選擇下一步：
+   accept   接受當前策略並停止 loop
+   continue 繼續沿目前方向迭代
+   revise   針對目前策略修正
+   pivot    改策略方向（下一輪你可以先更新 MD/spec）
+   stop     停止目前 loop
+""")
+
+        while True:
+            action = input("   action > ").strip().lower() or proposed_action.value
+            try:
+                normalized_action = HumanDecisionAction(action)
+                break
+            except ValueError:
+                print("   ⚠️ 請輸入 accept / continue / revise / pivot / stop")
+
+        rationale = input("   rationale > ").strip()
+        next_focus_raw = input("   next focus（可留白，用逗號分隔）> ").strip()
+        next_focus = [item.strip() for item in next_focus_raw.split(",") if item.strip()]
+
+        return HumanDecision(
+            action=normalized_action,
+            rationale=rationale,
+            next_focus=next_focus,
+        )
     
     def _extract_python_code(self, content: str) -> str:
         """從 LLM 回應中提取可解析的 Python 程式碼。"""
@@ -1820,6 +1865,7 @@ class {class_name}(BaseStrategy):
                     market_analysis=user_input or f"{symbol} {interval}",
                     initial_strategy=spec,
                     md_context=md_context,
+                    human_decision_provider=self._prompt_human_checkpoint,
                 )
                 if workflow.route_decision is not None:
                     print(
@@ -1974,6 +2020,8 @@ class {class_name}(BaseStrategy):
                 from data import load_csv
                 price_df = load_csv(data_path)
                 
+                from reports import generate_backtest_report
+
                 output = generate_backtest_report(
                     result=backtest_result,
                     price_df=price_df,

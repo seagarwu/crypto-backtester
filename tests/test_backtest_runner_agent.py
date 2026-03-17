@@ -153,6 +153,27 @@ class TestIndicatorCalculation:
         
         assert "MACD" in indicators
 
+    def test_calculate_volume_ma_does_not_collide_with_price_ma(self):
+        agent = BacktestRunnerAgent()
+
+        class MockStrategy:
+            required_indicators = ["Volume_MA_20", "MA_10"]
+
+            def calculate_signals(self, data, indicators):
+                return pd.DataFrame({
+                    'datetime': data['datetime'],
+                    'signal': [0] * len(data),
+                })
+
+        strategy = MockStrategy()
+        data = self.create_sample_data(100)
+
+        indicators = agent._calculate_indicators(strategy, data)
+
+        assert "Volume_MA_20" in indicators
+        assert "MA_10" in indicators
+        assert indicators["Volume_MA_20"].iloc[-1] != indicators["MA_10"].iloc[-1]
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

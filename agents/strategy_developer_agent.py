@@ -618,10 +618,15 @@ class StrategyName(BaseStrategy):
     def _parse_json_response(self, content: str) -> Dict[str, Any]:
         """從模型回應中提取 JSON。"""
         text = content.strip()
-        if "```json" in text:
-            text = text.split("```json", 1)[1].split("```", 1)[0]
-        elif "```" in text:
-            text = text.split("```", 1)[1].split("```", 1)[0]
+        if text.startswith("```json"):
+            text = text[len("```json"):]
+            if text.endswith("```"):
+                text = text[:-3]
+        elif text.startswith("```"):
+            first_newline = text.find("\n")
+            text = text[first_newline + 1:] if first_newline != -1 else text[3:]
+            if text.endswith("```"):
+                text = text[:-3]
         return json.loads(text.strip())
 
     def _parse_structured_response(self, content: str) -> Dict[str, Any]:
@@ -681,9 +686,6 @@ class StrategyName(BaseStrategy):
             return ""
 
         candidates: List[str] = []
-        stripped = content.strip()
-        if stripped:
-            candidates.append(stripped)
 
         fenced_blocks = re.findall(r"```(?:python)?\s*(.*?)```", content, flags=re.DOTALL)
         candidates.extend(block.strip() for block in fenced_blocks if block.strip())
@@ -704,6 +706,10 @@ class StrategyName(BaseStrategy):
             code_lines = self._collect_code_lines(lines[start_idx:])
             if code_lines:
                 candidates.append("\n".join(code_lines).strip())
+
+        stripped = content.strip()
+        if stripped and re.search(r"(^|\n)\s*(from |import |class |def )", stripped):
+            candidates.append(stripped)
 
         seen = set()
         for candidate in candidates:

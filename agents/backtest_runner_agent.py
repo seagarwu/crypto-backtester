@@ -273,17 +273,21 @@ class BacktestRunnerAgent:
         required = strategy.required_indicators
         
         for ind in required:
-            if "MA_" in ind:
+            if ind.startswith("Volume_MA_"):
+                period = int(ind.split("_")[2])
+                indicators[ind] = data['volume'].rolling(window=period).mean()
+
+            elif ind.startswith("MA_"):
                 # 移動平均
                 period = int(ind.split("_")[1])
                 indicators[ind] = data['close'].rolling(window=period).mean()
             
-            elif "EMA_" in ind:
+            elif ind.startswith("EMA_"):
                 # 指數移動平均
                 period = int(ind.split("_")[1])
                 indicators[ind] = data['close'].ewm(span=period, adjust=False).mean()
             
-            elif "RSI_" in ind:
+            elif ind.startswith("RSI_"):
                 # RSI
                 period = int(ind.split("_")[1])
                 delta = data['close'].diff()
@@ -292,7 +296,7 @@ class BacktestRunnerAgent:
                 rs = gain / loss
                 indicators[ind] = 100 - (100 / (1 + rs))
             
-            elif "MACD_" in ind:
+            elif ind.startswith("MACD"):
                 # MACD
                 ema12 = data['close'].ewm(span=12, adjust=False).mean()
                 ema26 = data['close'].ewm(span=26, adjust=False).mean()
@@ -301,7 +305,7 @@ class BacktestRunnerAgent:
                 histogram = macd - signal
                 indicators[ind] = histogram
             
-            elif "BB_" in ind:
+            elif ind.startswith("BB_") or ind.startswith("BBand_"):
                 # Bollinger Bands
                 parts = ind.split("_")
                 period = int(parts[1])

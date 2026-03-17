@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Backtest Report",
+  "type": "object",
+  "required": [
+    "strategy_name",
+    "iteration",
+    "status",
+    "market",
+    "timeframe",
+    "period_start",
+    "period_end",
+    "net_return_pct",
+    "max_drawdown_pct",
+    "sharpe",
+    "sortino",
+    "win_rate_pct",
+    "profit_factor",
+    "total_trades",
+    "notes",
+    "command"
+  ],
+  "properties": {
+    "strategy_name": { "type": "string" },
+    "iteration": { "type": "integer", "minimum": 0 },
+    "status": { "type": "string" },
+    "market": { "type": "string" },
+    "timeframe": { "type": "string" },
+    "period_start": { "type": "string" },
+    "period_end": { "type": "string" },
+    "net_return_pct": { "type": ["number", "integer"] },
+    "max_drawdown_pct": { "type": ["number", "integer"] },
+    "sharpe": { "type": ["number", "integer", "null"] },
+    "sortino": { "type": ["number", "integer", "null"] },
+    "win_rate_pct": { "type": ["number", "integer", "null"] },
+    "profit_factor": { "type": ["number", "integer", "null"] },
+    "total_trades": { "type": ["number", "integer"] },
+    "notes": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "command": { "type": "string" },
+    "evaluation": {}
+  },
+  "additionalProperties": true
+}

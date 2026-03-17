@@ -13,6 +13,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from agents.conversation import ConversationalStrategyDeveloper
 from agents.strategy_developer_agent import StrategySpec
+from agents.strategy_rd_workflow import HumanDecisionAction
 
 
 class TestStrategyMDManagement:
@@ -177,6 +178,13 @@ class TestStrategyMDManagement:
 
 class TestMDContextPassing:
     """測試 MD 上下文傳遞給 Engineer Agent"""
+
+    @pytest.fixture
+    def conversation(self, tmp_path):
+        conv = ConversationalStrategyDeveloper()
+        conv.md_dir = tmp_path / "ideas"
+        conv._llm = MagicMock()
+        return conv
     
     def test_generate_strategy_code_accepts_md_context(self):
         """測試 generate_strategy_code 接受 md_context 參數"""
@@ -187,6 +195,29 @@ class TestMDContextPassing:
         params = list(sig.parameters.keys())
         
         assert 'md_context' in params
+
+    def test_prompt_human_checkpoint_collects_user_decision(self, conversation):
+        from agents.reporter_agent import StrategyReport
+
+        context = {
+            "report": StrategyReport(
+                strategy_name="Demo",
+                strategy_description="demo",
+                total_return=5.0,
+                sharpe_ratio=1.1,
+                max_drawdown=12.0,
+                win_rate=48.0,
+                total_trades=20,
+            ),
+            "proposed_action": HumanDecisionAction.REVISE,
+        }
+
+        with patch("builtins.input", side_effect=["continue", "keep refining", "reduce drawdown, add stop"]):
+            decision = conversation._prompt_human_checkpoint(context)
+
+        assert decision.action is HumanDecisionAction.CONTINUE
+        assert decision.rationale == "keep refining"
+        assert decision.next_focus == ["reduce drawdown", "add stop"]
 
 
 class TestGeneratedStrategyCodeHandling:

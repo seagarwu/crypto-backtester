@@ -1,0 +1,324 @@
+#!/usr/bin/env python3
+"""
+Research artifact contracts for the human-in-the-loop strategy workflow.
+"""
+
+from __future__ import annotations
+
+from dataclasses import asdict, is_dataclass
+from datetime import datetime
+from enum import Enum
+import json
+from pathlib import Path
+from typing import Any, Dict, Iterable, Optional
+
+
+def _stringify(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    return str(value)
+
+
+def _to_serializable(value: Any) -> Any:
+    if is_dataclass(value):
+        return {k: _to_serializable(v) for k, v in asdict(value).items()}
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, Enum):
+        return value.value
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(k): _to_serializable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_to_serializable(v) for v in value]
+    if hasattr(value, "isoformat") and callable(value.isoformat):
+        try:
+            return value.isoformat()
+        except TypeError:
+            return str(value)
+    if hasattr(value, "item") and callable(getattr(value, "item")):
+        try:
+            return value.item()
+        except Exception:
+            return str(value)
+    return value
+
+
+def _write_text(path: Path, content: str) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    return path
+
+
+class ResearchArtifactWriter:
+    """Writes canonical research artifacts for agent collaboration."""
+
+    def __init__(self, research_dir: str = "research"):
+        self.research_dir = Path(research_dir)
+
+    def ensure_workspace(self) -> Dict[str, Path]:
+        self.research_dir.mkdir(parents=True, exist_ok=True)
+        files = {
+            "strategy_spec": self.research_dir / "strategy_spec.md",
+            "implementation_note": self.research_dir / "implementation_note.md",
+            "backtest_report_md": self.research_dir / "backtest_report.md",
+            "backtest_report_json": self.research_dir / "backtest_report.json",
+            "iteration_log": self.research_dir / "iteration_log.md",
+        }
+        for key, path in files.items():
+            if path.exists():
+                continue
+            if key == "iteration_log":
+                _write_text(path, "# Iteration Log\n")
+            elif path.suffix == ".json":
+                _write_text(path, "{}\n")
+            else:
+                _write_text(path, "")
+        return files
+
+    def write_strategy_spec(
+        self,
+        strategy_spec: Any,
+        iteration: int,
+        market: str,
+        timeframe: str,
+        acceptance_criteria: Iterable[str],
+        human_decision: Optional[Any] = None,
+    ) -> Path:
+        decision_action = getattr(human_decision, "action", "")
+        if hasattr(decision_action, "value"):
+            decision_action = decision_action.value
+        rationale = getattr(human_decision, "rationale", "")
+        next_focus = getattr(human_decision, "next_focus", []) or []
+
+        content = "\n".join(
+            [
+                "# Strategy Spec",
+                "",
+                "## Metadata",
+                f"- Strategy: {_stringify(getattr(strategy_spec, 'name', ''))}",
+                f"- Iteration: {iteration}",
+                f"- Market: {market}",
+                f"- Timeframe: {timeframe}",
+                "",
+                "## Hypothesis",
+                _stringify(getattr(strategy_spec, "description", "")) or "TBD",
+                "",
+                "## Entry Rules",
+                f"- {_stringify(getattr(strategy_spec, 'entry_rules', '')) or 'TBD'}",
+                "",
+                "## Exit Rules",
+                f"- {_stringify(getattr(strategy_spec, 'exit_rules', '')) or 'TBD'}",
+                "",
+                "## Position Sizing",
+                "- Full allocation unless strategy parameters specify otherwise.",
+                "",
+                "## Risk Controls",
+                f"- Risk level: {_stringify(getattr(strategy_spec, 'risk_level', 'medium'))}",
+                "",
+                "## Parameters Under Test",
+                *(
+                    [f"- {key}: {_to_serializable(value)}" for key, value in (getattr(strategy_spec, "parameters", {}) or {}).items()]
+                    or ["- None"]
+                ),
+                "",
+                "## Acceptance Criteria",
+                *[f"- {item}" for item in acceptance_criteria],
+                "",
+                "## Human Decision Checkpoint",
+                f"- Continue / Stop / Pivot: {_stringify(decision_action) or 'pending'}",
+                f"- Human rationale: {_stringify(rationale) or 'pending'}",
+                f"- Any overridden constraints or new priorities: {', '.join(next_focus) if next_focus else 'none'}",
+                "",
+            ]
+        )
+        return _write_text(self.research_dir / "strategy_spec.md", content)
+
+    def write_implementation_note(
+        self,
+        iteration: int,
+        strategy_spec: Any,
+        code_result: Any,
+        validation: Any,
+        code_path: str,
+    ) -> Path:
+        assumptions = getattr(code_result, "assumptions", []) or []
+        issues = getattr(validation, "issues", []) or []
+        smoke_metrics = getattr(validation, "smoke_metrics", {}) or {}
+
+        content = "\n".join(
+            [
+                "# Implementation Note",
+                "",
+                f"- Iteration: {iteration}",
+                f"- Strategy: {_stringify(getattr(strategy_spec, 'name', ''))}",
+                f"- Files changed: {code_path or 'N/A'}",
+                f"- Strategy behaviors implemented: {_stringify(getattr(code_result, 'summary', '')) or 'N/A'}",
+                f"- Assumptions: {', '.join(_stringify(item) for item in assumptions) if assumptions else 'none'}",
+                f"- Known gaps: {', '.join(_stringify(item) for item in issues) if issues else 'none'}",
+                f"- Validation performed: {'passed' if getattr(validation, 'passed', False) else 'failed'}",
+                "",
+                "## Smoke Metrics",
+                *(
+                    [f"- {key}: {_to_serializable(value)}" for key, value in smoke_metrics.items()]
+                    or ["- None"]
+                ),
+                "",
+            ]
+        )
+        return _write_text(self.research_dir / "implementation_note.md", content)
+
+    def write_backtest_report(
+        self,
+        iteration: int,
+        strategy_spec: Any,
+        backtest_report: Optional[Any],
+        evaluation: Optional[Any],
+        command: str,
+        status: str,
+        notes: Optional[Iterable[str]] = None,
+    ) -> Dict[str, Path]:
+        notes_list = [str(item) for item in (notes or [])]
+        report_md = self._render_backtest_report_md(
+            iteration=iteration,
+            strategy_spec=strategy_spec,
+            backtest_report=backtest_report,
+            command=command,
+            status=status,
+            notes=notes_list,
+        )
+        report_json = self._render_backtest_report_json(
+            iteration=iteration,
+            strategy_spec=strategy_spec,
+            backtest_report=backtest_report,
+            evaluation=evaluation,
+            command=command,
+            status=status,
+            notes=notes_list,
+        )
+        return {
+            "markdown": _write_text(self.research_dir / "backtest_report.md", report_md),
+            "json": _write_text(
+                self.research_dir / "backtest_report.json",
+                json.dumps(report_json, ensure_ascii=False, indent=2) + "\n",
+            ),
+        }
+
+    def append_iteration_log(
+        self,
+        iteration: int,
+        spec_version: str,
+        code_status: str,
+        backtest_status: str,
+        total_return: Optional[float],
+        max_drawdown: Optional[float],
+        strategy_recommendation: str,
+        human_decision: Optional[Any],
+        next_action: str,
+    ) -> Path:
+        path = self.research_dir / "iteration_log.md"
+        if not path.exists():
+            _write_text(path, "# Iteration Log\n")
+        action = getattr(human_decision, "action", "")
+        if hasattr(action, "value"):
+            action = action.value
+        rationale = getattr(human_decision, "rationale", "")
+        entry = "\n".join(
+            [
+                "",
+                f"## Iteration {iteration}",
+                f"- Spec version: {spec_version}",
+                f"- Code status: {code_status}",
+                f"- Backtest status: {backtest_status}",
+                f"- Return: {'' if total_return is None else total_return}",
+                f"- MDD: {'' if max_drawdown is None else max_drawdown}",
+                f"- Strategy recommendation: {strategy_recommendation}",
+                f"- Human decision: {action or 'pending'}{f' | {rationale}' if rationale else ''}",
+                f"- Next action: {next_action}",
+                "",
+            ]
+        )
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(entry)
+        return path
+
+    def _render_backtest_report_md(
+        self,
+        iteration: int,
+        strategy_spec: Any,
+        backtest_report: Optional[Any],
+        command: str,
+        status: str,
+        notes: Iterable[str],
+    ) -> str:
+        config = getattr(backtest_report, "config", None)
+        run_timestamp = datetime.now().isoformat(timespec="seconds")
+        lines = [
+            "# Backtest Report",
+            "",
+            f"- Strategy: {_stringify(getattr(strategy_spec, 'name', ''))}",
+            f"- Iteration: {iteration}",
+            f"- Dataset / symbol / timeframe used: {_stringify(getattr(config, 'symbol', ''))} / {_stringify(getattr(config, 'interval', getattr(strategy_spec, 'timeframe', '')))}",
+            f"- Command executed: {command}",
+            f"- Run timestamp: {run_timestamp}",
+            f"- Status: {status}",
+            "",
+            "## Summary Metrics",
+        ]
+        metrics = [
+            ("Net return %", getattr(backtest_report, "total_return", None)),
+            ("Max drawdown %", getattr(backtest_report, "max_drawdown", None)),
+            ("Sharpe", getattr(backtest_report, "sharpe_ratio", None)),
+            ("Sortino", None),
+            ("Win rate %", getattr(backtest_report, "win_rate", None)),
+            ("Profit factor", getattr(backtest_report, "profit_factor", None)),
+            ("Total trades", getattr(backtest_report, "total_trades", None)),
+        ]
+        for label, value in metrics:
+            lines.append(f"- {label}: {'' if value is None else value}")
+        lines.extend(
+            [
+                "",
+                "## Notable Trades Or Failure Modes",
+                *([f"- {item}" for item in notes] or ["- None"]),
+                "",
+                "## Interpretation Limits",
+                f"- Evaluation status: {_stringify(status)}",
+                "",
+            ]
+        )
+        return "\n".join(lines)
+
+    def _render_backtest_report_json(
+        self,
+        iteration: int,
+        strategy_spec: Any,
+        backtest_report: Optional[Any],
+        evaluation: Optional[Any],
+        command: str,
+        status: str,
+        notes: Iterable[str],
+    ) -> Dict[str, Any]:
+        config = getattr(backtest_report, "config", None)
+        return {
+            "strategy_name": _stringify(getattr(strategy_spec, "name", "")),
+            "iteration": iteration,
+            "status": status,
+            "market": _stringify(getattr(config, "symbol", "")),
+            "timeframe": _stringify(getattr(config, "interval", getattr(strategy_spec, "timeframe", ""))),
+            "period_start": _stringify(getattr(config, "start_date", "")),
+            "period_end": _stringify(getattr(config, "end_date", "")),
+            "net_return_pct": _to_serializable(getattr(backtest_report, "total_return", 0)),
+            "max_drawdown_pct": _to_serializable(getattr(backtest_report, "max_drawdown", 0)),
+            "sharpe": _to_serializable(getattr(backtest_report, "sharpe_ratio", None)),
+            "sortino": None,
+            "win_rate_pct": _to_serializable(getattr(backtest_report, "win_rate", None)),
+            "profit_factor": _to_serializable(getattr(backtest_report, "profit_factor", None)),
+            "total_trades": _to_serializable(getattr(backtest_report, "total_trades", 0)),
+            "notes": list(notes),
+            "command": command,
+            "evaluation": _to_serializable(evaluation) if evaluation is not None else None,
+        }

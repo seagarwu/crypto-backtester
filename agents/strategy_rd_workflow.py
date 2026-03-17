@@ -16,7 +16,7 @@ Strategy R&D Workflow - 策略研發閉環
 
 import os
 import sys
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 import logging
@@ -29,6 +29,7 @@ from enum import Enum
 
 # 確保可以匯入模組
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from research_contracts import ResearchArtifactWriter
 
 from agents.strategy_developer_agent import (
     StrategyDeveloperAgent,
@@ -82,6 +83,9 @@ class RDConfig:
     # 報告輸出目錄
     report_dir: str = "reports"
 
+    # Human-in-the-loop research artifacts
+    research_dir: str = "research"
+
 
 @dataclass
 class CodeValidationResult:
@@ -100,6 +104,24 @@ class IterationFeedback:
     performance_issues: List[str] = field(default_factory=list)
     required_changes: List[str] = field(default_factory=list)
     validation_issues: List[str] = field(default_factory=list)
+
+
+class HumanDecisionAction(Enum):
+    CONTINUE = "continue"
+    REVISE = "revise"
+    PIVOT = "pivot"
+    STOP = "stop"
+    ACCEPT = "accept"
+
+
+@dataclass
+class HumanDecision:
+    """人類 checkpoint 決策。"""
+    action: HumanDecisionAction
+    rationale: str = ""
+    next_focus: List[str] = field(default_factory=list)
+    updated_strategy: Optional[StrategySpec] = None
+    source: str = "human"
 
 
 class StrategyRoute(Enum):
@@ -154,6 +176,9 @@ class StrategyRDWorkflow:
         self.current_code_path: str = ""
         self.current_validated_code_path: str = ""
         self.route_decision: Optional[RouteDecision] = None
+        self.pending_human_decision: Optional[HumanDecision] = None
+        self.research_writer = ResearchArtifactWriter(self.config.research_dir)
+        self.research_writer.ensure_workspace()
     
     def run(
         self,
@@ -162,6 +187,7 @@ class StrategyRDWorkflow:
         target_metrics: Dict[str, float] = None,
         initial_strategy: Optional[StrategySpec] = None,
         md_context: str = None,
+        human_decision_provider: Optional[Callable[[Dict[str, Any]], HumanDecision]] = None,
     ) -> StrategyReport:
         """
         執行策略研發閉環
@@ -190,6 +216,13 @@ class StrategyRDWorkflow:
             if iteration == 1 and initial_strategy is not None:
                 logger.info("\n[1/4] 使用現有策略規格...")
                 strategy = initial_strategy
+            elif (
+                self.pending_human_decision is not None
+                and self.pending_human_decision.action is HumanDecisionAction.PIVOT
+                and self.pending_human_decision.updated_strategy is not None
+            ):
+                logger.info("\n[1/4] 根據 human checkpoint pivot 到新策略規格...")
+                strategy = self.pending_human_decision.updated_strategy
             elif iteration == 1:
                 logger.info("\n[1/4] 開發新策略...")
                 strategy = self.developer.develop_strategy(
@@ -220,10 +253,19 @@ class StrategyRDWorkflow:
                     self.route_decision.route.value,
                     self.route_decision.reason,
                 )
+            self.research_writer.write_strategy_spec(
+                strategy_spec=strategy,
+                iteration=iteration,
+                market=self.config.symbol,
+                timeframe=self.config.interval,
+                acceptance_criteria=self._acceptance_criteria(),
+                human_decision=self.pending_human_decision,
+            )
 
             feedback = self._build_iteration_feedback(
                 validation=self.iterations[-1]["validation"] if self.iterations else None,
                 evaluation=self.iterations[-1]["evaluation"] if self.iterations else None,
+                human_decision=self.pending_human_decision,
             )
 
             logger.info("\n[2/5] Engineer Agent 生成/修正策略代碼...")
@@ -263,6 +305,13 @@ class StrategyRDWorkflow:
             )
             self.current_code = code_result.code
             self.current_code_path = str(code_path)
+            self.research_writer.write_implementation_note(
+                iteration=iteration,
+                strategy_spec=strategy,
+                code_result=code_result,
+                validation=validation,
+                code_path=str(code_path),
+            )
 
             if not validation.passed:
                 logger.warning("   代碼驗證失敗，進入下一輪修正")
@@ -275,7 +324,16 @@ class StrategyRDWorkflow:
                     "validation": validation,
                     "evaluation": None,
                     "report": None,
+                    "human_decision": None,
+                    "proposed_action": HumanDecisionAction.REVISE.value,
                 })
+                self._write_failed_iteration_artifacts(
+                    iteration=iteration,
+                    strategy=strategy,
+                    validation=validation,
+                    backtest_status="validation_failed",
+                    next_action=HumanDecisionAction.REVISE.value,
+                )
                 if iteration >= self.config.max_iterations:
                     logger.warning("   已達最大迭代次數，停止優化")
                 continue
@@ -309,7 +367,16 @@ class StrategyRDWorkflow:
                     "validation": validation,
                     "evaluation": None,
                     "report": None,
+                    "human_decision": None,
+                    "proposed_action": HumanDecisionAction.REVISE.value,
                 })
+                self._write_failed_iteration_artifacts(
+                    iteration=iteration,
+                    strategy=strategy,
+                    validation=validation,
+                    backtest_status="failed",
+                    next_action=HumanDecisionAction.REVISE.value,
+                )
                 if iteration >= self.config.max_iterations:
                     logger.warning("   已達最大迭代次數，停止優化")
                 continue
@@ -340,6 +407,8 @@ class StrategyRDWorkflow:
             )
             
             # 保存這次迭代
+            proposed_action = self._propose_next_action(evaluation)
+
             self.iterations.append({
                 'iteration': iteration,
                 'strategy': strategy,
@@ -348,29 +417,82 @@ class StrategyRDWorkflow:
                 'backtest_report': backtest_report,
                 'evaluation': evaluation,
                 'report': report,
+                'human_decision': None,
+                'proposed_action': proposed_action.value,
             })
-            
+
             self.current_report = report
             
             # 顯示簡短報告
             print(self.reporter.format_report_compact(report))
             
-            # 檢查是否通過
-            if evaluation.result == EvaluationResult.PASS:
-                logger.info("\n✅ 策略通過評估！")
+            decision_context = self._build_decision_context(
+                iteration=iteration,
+                strategy=strategy,
+                validation=validation,
+                backtest_report=backtest_report,
+                evaluation=evaluation,
+                report=report,
+                proposed_action=proposed_action,
+            )
+            human_decision = self._resolve_human_decision(
+                proposed_action=proposed_action,
+                context=decision_context,
+                provider=human_decision_provider,
+            )
+            self.iterations[-1]["human_decision"] = human_decision
+            self.pending_human_decision = human_decision
+            self._apply_human_decision(report, human_decision)
+            self.research_writer.write_strategy_spec(
+                strategy_spec=strategy,
+                iteration=iteration,
+                market=self.config.symbol,
+                timeframe=self.config.interval,
+                acceptance_criteria=self._acceptance_criteria(),
+                human_decision=human_decision,
+            )
+            self.research_writer.write_backtest_report(
+                iteration=iteration,
+                strategy_spec=strategy,
+                backtest_report=backtest_report,
+                evaluation=evaluation,
+                command=self._backtest_command_hint(strategy.name),
+                status="success",
+                notes=list(getattr(evaluation, "weaknesses", []) or []),
+            )
+            self.research_writer.append_iteration_log(
+                iteration=iteration,
+                spec_version=f"{strategy.name}-iteration-{iteration}",
+                code_status="validated",
+                backtest_status="success",
+                total_return=backtest_report.total_return,
+                max_drawdown=backtest_report.max_drawdown,
+                strategy_recommendation=proposed_action.value,
+                human_decision=human_decision,
+                next_action=human_decision.action.value,
+            )
+
+            logger.info(
+                "\n🧑 Human checkpoint: %s%s",
+                human_decision.action.value,
+                f" | {human_decision.rationale}" if human_decision.rationale else "",
+            )
+
+            if human_decision.action in (HumanDecisionAction.ACCEPT, HumanDecisionAction.STOP):
+                logger.info("\n🛑 依 human decision 結束當前策略 loop")
                 break
-            elif evaluation.result == EvaluationResult.FAIL:
-                logger.info("\n❌ 策略未通過，嘗試優化...")
-                if iteration >= self.config.max_iterations:
-                    logger.warning("   已達最大迭代次數，停止優化")
-                    break
+
+            if iteration >= self.config.max_iterations:
+                logger.warning("   已達最大迭代次數，停止優化")
+                break
+
+            if human_decision.action is HumanDecisionAction.PIVOT:
+                logger.info("\n🔀 下一輪將依 human decision pivot 新策略方向")
+            elif human_decision.action is HumanDecisionAction.REVISE:
+                logger.info("\n⚠️ 依 human decision 繼續修正策略")
             else:
-                # NEEDS_IMPROVEMENT
-                logger.info("\n⚠️ 策略需要改進，繼續優化...")
-                if iteration >= self.config.max_iterations:
-                    logger.warning("   已達最大迭代次數，停止優化")
-                    break
-        
+                logger.info("\n🔁 依 human decision 繼續下一輪")
+
         return self.current_report
 
     def _persist_code_artifact(self, filepath: Path, code: str) -> Path:
@@ -816,6 +938,7 @@ class {class_name}(BaseStrategy):
         self,
         validation: Optional[CodeValidationResult],
         evaluation,
+        human_decision: Optional[HumanDecision] = None,
     ) -> IterationFeedback:
         """整理 validation / evaluation 成結構化 feedback。"""
         feedback = IterationFeedback()
@@ -825,7 +948,141 @@ class {class_name}(BaseStrategy):
         if evaluation is not None:
             feedback.performance_issues.extend(getattr(evaluation, "weaknesses", []))
             feedback.required_changes.extend(getattr(evaluation, "recommendations", []))
+        if human_decision is not None:
+            if human_decision.rationale:
+                feedback.required_changes.append(f"Human decision: {human_decision.rationale}")
+            if human_decision.next_focus:
+                feedback.required_changes.extend(
+                    [f"Human priority: {item}" for item in human_decision.next_focus]
+                )
         return feedback
+
+    def _acceptance_criteria(self) -> List[str]:
+        return [
+            f"Return > {self.config.min_total_return:.2f}%",
+            f"MDD < {self.config.max_drawdown:.2f}%",
+            f"Sharpe > {self.config.min_sharpe:.2f}",
+            f"Win rate > {self.config.min_win_rate:.2f}%",
+            f"Trades >= {self.config.min_trades}",
+        ]
+
+    def _backtest_command_hint(self, strategy_name: str) -> str:
+        return (
+            f"workflow.run_backtest strategy={strategy_name} "
+            f"symbol={self.config.symbol} interval={self.config.interval} "
+            f"start={self.config.start_date} end={self.config.end_date}"
+        )
+
+    def _write_failed_iteration_artifacts(
+        self,
+        iteration: int,
+        strategy: StrategySpec,
+        validation: CodeValidationResult,
+        backtest_status: str,
+        next_action: str,
+    ) -> None:
+        self.research_writer.write_backtest_report(
+            iteration=iteration,
+            strategy_spec=strategy,
+            backtest_report=None,
+            evaluation=None,
+            command=self._backtest_command_hint(strategy.name),
+            status=backtest_status,
+            notes=list(validation.issues or []),
+        )
+        self.research_writer.append_iteration_log(
+            iteration=iteration,
+            spec_version=f"{strategy.name}-iteration-{iteration}",
+            code_status="validation_failed" if not validation.passed else "validated",
+            backtest_status=backtest_status,
+            total_return=None,
+            max_drawdown=None,
+            strategy_recommendation=HumanDecisionAction.REVISE.value,
+            human_decision=None,
+            next_action=next_action,
+        )
+
+    def _propose_next_action(self, evaluation) -> HumanDecisionAction:
+        if evaluation.result == EvaluationResult.PASS:
+            return HumanDecisionAction.ACCEPT
+        if evaluation.result == EvaluationResult.FAIL:
+            return HumanDecisionAction.REVISE
+        return HumanDecisionAction.CONTINUE
+
+    def _build_decision_context(
+        self,
+        iteration: int,
+        strategy: StrategySpec,
+        validation: CodeValidationResult,
+        backtest_report: BacktestReport,
+        evaluation,
+        report: StrategyReport,
+        proposed_action: HumanDecisionAction,
+    ) -> Dict[str, Any]:
+        return {
+            "iteration": iteration,
+            "strategy": strategy,
+            "validation": validation,
+            "backtest_report": backtest_report,
+            "evaluation": evaluation,
+            "report": report,
+            "proposed_action": proposed_action,
+        }
+
+    def _resolve_human_decision(
+        self,
+        proposed_action: HumanDecisionAction,
+        context: Dict[str, Any],
+        provider: Optional[Callable[[Dict[str, Any]], HumanDecision]],
+    ) -> HumanDecision:
+        if provider is None:
+            return HumanDecision(
+                action=proposed_action,
+                rationale="No explicit human override; follow workflow default",
+                source="workflow-default",
+            )
+
+        decision = provider(context)
+        return self._normalize_human_decision(decision, proposed_action)
+
+    def _normalize_human_decision(
+        self,
+        decision: Any,
+        default_action: HumanDecisionAction,
+    ) -> HumanDecision:
+        if isinstance(decision, HumanDecision):
+            return decision
+        if isinstance(decision, HumanDecisionAction):
+            return HumanDecision(action=decision)
+        if isinstance(decision, str):
+            return HumanDecision(action=HumanDecisionAction(decision.strip().lower()))
+        if isinstance(decision, dict):
+            action = decision.get("action", default_action.value)
+            updated_strategy = decision.get("updated_strategy")
+            if isinstance(action, HumanDecisionAction):
+                normalized_action = action
+            else:
+                normalized_action = HumanDecisionAction(str(action).strip().lower())
+            return HumanDecision(
+                action=normalized_action,
+                rationale=str(decision.get("rationale", "")),
+                next_focus=list(decision.get("next_focus", []) or []),
+                updated_strategy=updated_strategy if isinstance(updated_strategy, StrategySpec) else None,
+                source=str(decision.get("source", "human")),
+            )
+
+        raise TypeError(f"Unsupported human decision type: {type(decision)!r}")
+
+    def _apply_human_decision(
+        self,
+        report: StrategyReport,
+        decision: HumanDecision,
+    ) -> None:
+        if decision.action is HumanDecisionAction.ACCEPT:
+            report.approved = True
+        elif decision.action is HumanDecisionAction.STOP:
+            report.approved = False
+        report.approval_notes = decision.rationale
 
     def _feedback_to_dict(self, feedback: IterationFeedback) -> Dict[str, Any]:
         return {
@@ -845,6 +1102,10 @@ class {class_name}(BaseStrategy):
         if self.current_report:
             self.current_report.approved = True
             self.current_report.approval_notes = notes
+            self.pending_human_decision = HumanDecision(
+                action=HumanDecisionAction.ACCEPT,
+                rationale=notes,
+            )
             logger.info(f"\n✅ 策略已批准: {notes}")
     
     def reject_strategy(self, reason: str = "") -> None:
@@ -857,6 +1118,10 @@ class {class_name}(BaseStrategy):
         if self.current_report:
             self.current_report.approved = False
             self.current_report.approval_notes = reason
+            self.pending_human_decision = HumanDecision(
+                action=HumanDecisionAction.STOP,
+                rationale=reason,
+            )
             logger.info(f"\n❌ 策略已拒絕: {reason}")
     
     def save_report(self, format: str = "markdown") -> str:
@@ -881,19 +1146,21 @@ class {class_name}(BaseStrategy):
     
     def get_best_strategy(self) -> Optional[StrategySpec]:
         """獲取最佳策略"""
-        if not self.iterations:
+        scored_iterations = [item for item in self.iterations if item.get("evaluation") is not None]
+        if not scored_iterations:
             return None
         
         # 找分數最高的
-        best = max(self.iterations, key=lambda x: x['evaluation'].score)
+        best = max(scored_iterations, key=lambda x: x['evaluation'].score)
         return best['strategy']
     
     def get_best_report(self) -> Optional[StrategyReport]:
         """獲取最佳報告"""
-        if not self.iterations:
+        scored_iterations = [item for item in self.iterations if item.get("evaluation") is not None]
+        if not scored_iterations:
             return None
         
-        best = max(self.iterations, key=lambda x: x['evaluation'].score)
+        best = max(scored_iterations, key=lambda x: x['evaluation'].score)
         return best['report']
 
 
@@ -932,13 +1199,42 @@ def main():
     
     # 執行
     workflow = StrategyRDWorkflow(config)
-    report = workflow.run()
+    
+    def prompt_human_checkpoint(context: Dict[str, Any]) -> HumanDecision:
+        report = context["report"]
+        proposed_action = context["proposed_action"]
+
+        print("\n" + "=" * 60)
+        print("Human checkpoint")
+        print("=" * 60)
+        print(f"策略: {report.strategy_name}")
+        print(f"收益率: {report.total_return:.2f}%")
+        print(f"Sharpe: {report.sharpe_ratio:.2f}")
+        print(f"回撤: {report.max_drawdown:.2f}%")
+        print(f"勝率: {report.win_rate:.2f}%")
+        print(f"Agent 建議: {proposed_action.value}")
+        print("可選動作: accept / continue / revise / pivot / stop")
+
+        while True:
+            action_raw = input("> action: ").strip().lower() or proposed_action.value
+            try:
+                action = HumanDecisionAction(action_raw)
+                break
+            except ValueError:
+                print("請輸入 accept / continue / revise / pivot / stop")
+
+        rationale = input("> rationale: ").strip()
+        next_focus_raw = input("> next focus (comma separated, optional): ").strip()
+        next_focus = [item.strip() for item in next_focus_raw.split(",") if item.strip()]
+        return HumanDecision(action=action, rationale=rationale, next_focus=next_focus)
+
+    report = workflow.run(human_decision_provider=prompt_human_checkpoint)
     
     # 保存
     if args.save:
         workflow.save_report()
     
-    # 等待人類審批
+    # 最終確認
     print("\n" + "=" * 60)
     print("請輸入決定:")
     print("  approve <備註> - 批准策略")
@@ -983,4 +1279,6 @@ if __name__ == "__main__":
 __all__ = [
     "StrategyRDWorkflow",
     "RDConfig",
+    "HumanDecision",
+    "HumanDecisionAction",
 ]

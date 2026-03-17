@@ -15,6 +15,8 @@ from agents.strategy_rd_workflow import (
     CodeValidationResult,
     IterationFeedback,
     StrategyRoute,
+    HumanDecision,
+    HumanDecisionAction,
 )
 from agents.strategy_evaluator_agent import EvaluationResult
 from agents.strategy_developer_agent import StrategySpec, EngineerCodeResult
@@ -183,6 +185,22 @@ class TestStrategyRDWorkflow:
         assert "Sharpe Ratio 低" in feedback.performance_issues
         assert "降低回撤" in feedback.required_changes
 
+    def test_build_iteration_feedback_includes_human_priorities(self):
+        workflow = StrategyRDWorkflow()
+
+        feedback = workflow._build_iteration_feedback(
+            validation=None,
+            evaluation=None,
+            human_decision=HumanDecision(
+                action=HumanDecisionAction.REVISE,
+                rationale="保留策略方向，但加入更嚴格風控",
+                next_focus=["add stop loss", "reduce drawdown"],
+            ),
+        )
+
+        assert "Human decision: 保留策略方向，但加入更嚴格風控" in feedback.required_changes
+        assert "Human priority: add stop loss" in feedback.required_changes
+
     def test_feedback_to_dict(self):
         workflow = StrategyRDWorkflow()
         feedback = IterationFeedback(
@@ -275,6 +293,67 @@ class TestStrategyRDWorkflow:
         assert workflow.route_decision.route is StrategyRoute.KNOWN
         assert "Deterministic known route" in workflow.iterations[0]["code_result"].summary
 
+    def test_run_uses_human_decision_provider_to_stop_after_checkpoint(self):
+        workflow = StrategyRDWorkflow(RDConfig(max_iterations=3, report_dir="reports/test_human_stop"))
+        workflow.backtester = FakeBacktester()
+        workflow.evaluator = FakeEvaluator()
+        workflow.reporter = FakeReporter()
+
+        decisions = []
+
+        def provider(context):
+            decisions.append(context["proposed_action"].value)
+            return HumanDecision(
+                action=HumanDecisionAction.STOP,
+                rationale="Human decided to pause after first report",
+                next_focus=["review trades manually"],
+            )
+
+        report = workflow.run(
+            initial_strategy=build_known_spec(),
+            market_analysis="test",
+            human_decision_provider=provider,
+        )
+
+        assert report is not None
+        assert decisions == ["accept"]
+        assert len(workflow.iterations) == 1
+        assert workflow.iterations[0]["human_decision"].action is HumanDecisionAction.STOP
+        assert report.approved is False
+        assert report.approval_notes == "Human decided to pause after first report"
+
+    def test_run_allows_human_pivot_strategy_for_next_iteration(self):
+        workflow = StrategyRDWorkflow(RDConfig(max_iterations=2, report_dir="reports/test_human_pivot"))
+        workflow.backtester = FakeBacktester()
+        workflow.evaluator = FakeNeedsImprovementEvaluator()
+        workflow.reporter = FakeReporter()
+
+        pivot_spec = StrategySpec(
+            name="Pivoted Strategy",
+            description="New direction",
+            indicators=["RSI", "MACD"],
+            parameters={},
+        )
+
+        def provider(context):
+            if context["iteration"] == 1:
+                return HumanDecision(
+                    action=HumanDecisionAction.PIVOT,
+                    rationale="Switch to a new strategy family",
+                    updated_strategy=pivot_spec,
+                )
+            return HumanDecision(action=HumanDecisionAction.STOP, rationale="Enough for now")
+
+        workflow.run(
+            initial_strategy=build_known_spec(),
+            market_analysis="test",
+            human_decision_provider=provider,
+        )
+
+        assert len(workflow.iterations) == 2
+        assert workflow.iterations[0]["human_decision"].action is HumanDecisionAction.PIVOT
+        assert workflow.iterations[1]["strategy"].name == "Pivoted Strategy"
+
 
 class FakeBacktester:
     def load_data(self, symbol, interval, start_date=None, end_date=None):
@@ -326,6 +405,25 @@ class FakeEvaluator:
         )
 
 
+class FakeNeedsImprovementEvaluator:
+    def evaluate(self, backtest_report, metrics=None, target_metrics=None):
+        from agents.strategy_evaluator_agent import StrategyEvaluation, EvaluationResult
+
+        return StrategyEvaluation(
+            result=EvaluationResult.NEEDS_IMPROVEMENT,
+            score=62.0,
+            sharpe_passed=False,
+            drawdown_passed=True,
+            win_rate_passed=True,
+            trades_passed=True,
+            return_passed=True,
+            summary="needs improvement",
+            strengths=["positive return"],
+            weaknesses=["fragile edge"],
+            recommendations=["refine entry logic"],
+        )
+
+
 class FakeReporter:
     def generate_report(self, market_analysis, strategy_spec, backtest_report, evaluation, iteration=1):
         from agents.reporter_agent import StrategyReport
@@ -353,6 +451,23 @@ class FakeReporter:
 
     def format_report_compact(self, report):
         return f"{report.strategy_name}: {report.sharpe_ratio}"
+
+
+def build_known_spec():
+    return StrategySpec(
+        name="BTCUSDT_BBand_Reversion",
+        description="4H/1H BBand reversion",
+        indicators=["BBand", "Volume"],
+        parameters={
+            "bb_period": 20,
+            "bb_std": 2.0,
+            "volume_ma_period": 20,
+            "volume_multiplier": 2.0,
+            "stop_loss_pct": 0.03,
+            "higher_timeframe": "4h",
+            "entry_timeframe": "1h",
+        },
+    )
 
 
 if __name__ == "__main__":

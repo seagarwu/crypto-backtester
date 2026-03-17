@@ -47,6 +47,10 @@ reports/*.png
 reports/*.html
 !reports/.gitkeep
 
+# Autonomous / deep-research runtime artifacts
+.autonomous/
+.research/
+
 # OS
 .DS_Store
 Thumbs.db
