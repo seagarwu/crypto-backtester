@@ -193,6 +193,18 @@ python scripts/ingest_skill_engineer_reference.py \
     --pattern reference_guided_synthesis
 ```
 
+把 MCP 查得的摘要導入 cache：
+
+```bash
+python scripts/ingest_mcp_engineer_reference.py \
+    --name "Firecrawl market structure note" \
+    --server firecrawl \
+    --resource-uri "https://example.com/report" \
+    --summary "Use only the market structure and risk-control ideas; rewrite everything repo-native." \
+    --tag market-structure \
+    --pattern reference_guided_synthesis
+```
+
 初始化 autonomous 任務工作區：
 
 ```bash
