@@ -174,6 +174,16 @@ python scripts/add_engineer_reference.py \
 python scripts/list_engineer_references.py
 ```
 
+使用 `read-github` skill 的 `gitmcp.py` 直接把 GitHub repo 摘要導入 cache：
+
+```bash
+python scripts/ingest_github_engineer_reference.py \
+    owner/repo \
+    --query "StrategyName" \
+    --tag bband \
+    --pattern multi_timeframe_bband_reversion
+```
+
 初始化 autonomous 任務工作區：
 
 ```bash
