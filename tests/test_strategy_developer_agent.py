@@ -160,6 +160,35 @@ class TestStrategyDeveloperAgent:
         assert "工程規則與工具上下文" in prompt
         assert "Engineer Agent Rules" in prompt
         assert "Shared Tool Capabilities" in prompt
+        assert "BaseStrategy 唯一強制抽象方法是 generate_signals" in prompt
+        assert "不要使用未定義的 self.config、self.params" in prompt
+
+    def test_revision_prompt_aligns_with_repo_contract(self):
+        agent = StrategyDeveloperAgent()
+        spec = StrategySpec(name="Demo", description="demo")
+
+        prompt = agent._build_revision_prompt(
+            spec=spec,
+            context="local context",
+            feedback_text='{"validation_issues":["missing generate_signals"]}',
+            previous_code="class Demo(BaseStrategy):\n    pass",
+        )
+
+        assert "BaseStrategy 唯一強制抽象方法是 generate_signals" in prompt
+        assert "不要把 calculate_signals 當成框架要求" in prompt
+        assert "不要使用未定義的 self.config、self.params" in prompt
+
+    def test_repo_native_class_skeleton_matches_base_strategy_contract(self):
+        agent = StrategyDeveloperAgent()
+        spec = StrategySpec(name="BTCUSDT MA策略", description="demo")
+
+        skeleton = agent._repo_native_class_skeleton(spec)
+
+        assert "class BtcusdtMaStrategy(BaseStrategy):" in skeleton
+        assert "super().__init__(name=name or 'BTCUSDT MA策略')" in skeleton
+        assert "def get_params(self) -> dict:" in skeleton
+        assert "def generate_signals(self, data: pd.DataFrame) -> pd.DataFrame:" in skeleton
+        assert "calculate_signals" not in skeleton
 
     def test_parse_structured_response(self):
         agent = StrategyDeveloperAgent()

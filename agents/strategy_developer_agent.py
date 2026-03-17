@@ -384,6 +384,8 @@ class StrategyDeveloperAgent:
         llm = self._get_llm()
         context = self._extract_strategy_context(md_context)
         agent_context = build_agent_context("engineer_agent")
+        repo_contract = self._repo_contract_prompt_block()
+        skeleton = self._repo_native_class_skeleton(spec)
 
         prompt = f"""你是一個專業的量化交易策略工程師。
 
@@ -392,14 +394,20 @@ class StrategyDeveloperAgent:
 工程規則與工具上下文：
 {agent_context or '無'}
 
+Repo 契約：
+{repo_contract}
+
 限制：
 1. 只輸出 Python 原始碼。
 2. 不要輸出 markdown。
 3. 不要輸出說明文字。
 4. 第一行必須是 import 或 from。
 5. 程式碼中必須包含一個繼承 BaseStrategy 的 class。
-6. 必須實作 required_indicators、calculate_signals、generate_signals。
-7. generate_signals 必須回傳 pandas.DataFrame，至少包含 datetime 與 signal 欄位。
+6. 必須實作 generate_signals；如有參數，請在 __init__ 定義並用 get_params() 回傳。
+7. required_indicators 應在 __init__ 設定或以 @property 暴露。
+8. generate_signals 必須回傳 pandas.DataFrame，至少包含 datetime 與 signal 欄位。
+9. 不要使用未定義的 self.config、self.params 或其他框架中不存在的屬性。
+10. calculate_signals 不是框架要求，除非真的需要，不要額外發明。
 8. 只允許使用 Python 標準庫、pandas、numpy 與 repo 內模組；禁止使用 pandas_ta、ta-lib、backtrader、vectorbt 或其他額外第三方套件。
 
 策略規格：
@@ -416,23 +424,7 @@ class StrategyDeveloperAgent:
 {context or '無'}
 
 必要程式骨架：
-from strategies.base import BaseStrategy, SignalType
-import pandas as pd
-
-class StrategyName(BaseStrategy):
-    @property
-    def required_indicators(self) -> list:
-        return []
-
-    def calculate_signals(self, data: pd.DataFrame, indicators: dict) -> dict:
-        return {{"signal": SignalType.HOLD, "strength": 0.0}}
-
-    def generate_signals(self, data: pd.DataFrame) -> pd.DataFrame:
-        df = data.copy()
-        if "datetime" not in df.columns:
-            df["datetime"] = df.index
-        df["signal"] = SignalType.HOLD
-        return df
+{skeleton}
 """
 
         try:
@@ -537,6 +529,8 @@ class StrategyName(BaseStrategy):
     ) -> str:
         """建立首輪或全量重生成 prompt。"""
         agent_context = build_agent_context("engineer_agent")
+        repo_contract = self._repo_contract_prompt_block()
+        skeleton = self._repo_native_class_skeleton(spec)
         return f"""你是一個專業的量化交易策略工程師。
 
 請根據策略規格、前一輪代碼與 feedback，輸出嚴格的三個區塊。
@@ -544,6 +538,9 @@ class StrategyName(BaseStrategy):
 
 工程規則與工具上下文：
 {agent_context or '無'}
+
+Repo 契約：
+{repo_contract}
 
 輸出格式必須完全如下：
 <SUMMARY>
@@ -561,10 +558,21 @@ class StrategyName(BaseStrategy):
 1. code 必須是完整可執行的 Python。
 2. code 第一行必須是 import 或 from。
 3. 必須包含繼承 BaseStrategy 的 class。
-4. 必須實作 required_indicators、calculate_signals、generate_signals。
-5. generate_signals 必須回傳 DataFrame，至少包含 datetime 與 signal 欄位。
-6. 不要省略任何 method，不要用 ...、TODO、佔位文字。
-7. 禁止匯入 pandas_ta、ta-lib、backtrader、vectorbt 或其他 repo 未內建的第三方交易函式庫。
+4. BaseStrategy 唯一強制抽象方法是 generate_signals；不要把 calculate_signals 當成必需方法。
+5. 如果策略有參數，請在 __init__ 定義，並在 get_params() 回傳。
+6. required_indicators 應在 __init__ 設定或以 @property 暴露。
+7. generate_signals 必須回傳 DataFrame，至少包含 datetime 與 signal 欄位。
+8. 不要使用未定義的 self.config、self.params 或其他 repo 中不存在的屬性。
+9. 不要省略任何 method，不要用 ...、TODO、佔位文字。
+10. 禁止匯入 pandas_ta、ta-lib、backtrader、vectorbt 或其他 repo 未內建的第三方交易函式庫。
+11. 如果你不確定某個 repo framework 方法是否存在，就不要發明；優先遵守上面的 Repo 契約。
+
+在輸出前，請自行檢查但不要輸出檢查結果：
+- class 是否繼承 BaseStrategy
+- 是否呼叫 super().__init__(...)
+- 是否沒有 self.config / self.params
+- generate_signals 是否完整且回傳 DataFrame
+- 程式碼是否能被 Python 解析
 
 策略規格：
 - 名稱: {spec.name}
@@ -584,6 +592,9 @@ class StrategyName(BaseStrategy):
 
 上一輪 feedback：
 {feedback_text}
+
+可直接參考的最小骨架：
+{skeleton}
 """
 
     def _build_revision_prompt(
@@ -595,6 +606,8 @@ class StrategyName(BaseStrategy):
     ) -> str:
         """建立修補導向 prompt，避免每輪重寫整份 class。"""
         agent_context = build_agent_context("engineer_agent")
+        repo_contract = self._repo_contract_prompt_block()
+        skeleton = self._repo_native_class_skeleton(spec)
         return f"""你是一個 Python 策略修復工程師。
 
 你的任務不是重寫整份策略，而是基於現有代碼做最小必要修正，讓它通過驗證。
@@ -602,6 +615,9 @@ class StrategyName(BaseStrategy):
 
 工程規則與工具上下文：
 {agent_context or '無'}
+
+Repo 契約：
+{repo_contract}
 
 不要輸出 markdown，不要輸出額外說明，不要輸出 JSON。
 輸出格式必須完全如下：
@@ -617,13 +633,24 @@ class StrategyName(BaseStrategy):
 
 硬性要求：
 1. 必須保留同一個 BaseStrategy 子類名稱：{spec.name}
-2. 必須提供完整 __init__
-3. 必須實作 required_indicators、calculate_signals、generate_signals
+2. 必須提供完整 __init__，並呼叫 super().__init__(...)
+3. BaseStrategy 唯一強制抽象方法是 generate_signals；不要把 calculate_signals 當成框架要求
+4. 如果策略有參數，請在 __init__ 定義，並在 get_params() 回傳
+5. required_indicators 應在 __init__ 設定或以 @property 暴露
+6. 不要使用未定義的 self.config、self.params
 4. 如果 feedback 提到 syntax error，先修語法，不要重構
 5. 如果 feedback 提到缺少 generate_signals，直接補上完整實作
 6. 不要輸出半截 method，不要輸出 ...、TODO、註解佔位
 7. generate_signals 必須回傳 DataFrame，至少包含 datetime 與 signal 欄位
 8. 禁止匯入 pandas_ta、ta-lib、backtrader、vectorbt 或其他 repo 未內建的第三方交易函式庫
+9. 如果上一輪使用了 repo 中不存在的屬性或框架方法，直接移除，改成 repo-native 寫法
+
+在輸出前，請自行檢查但不要輸出檢查結果：
+- class 名稱是否保持不變
+- super().__init__(...) 是否存在
+- generate_signals 是否完整
+- 是否沒有 self.config / self.params
+- 程式碼是否能被 Python 解析
 
 策略規格：
 - 名稱: {spec.name}
@@ -639,7 +666,56 @@ class StrategyName(BaseStrategy):
 
 必須修復的 feedback：
 {feedback_text}
+
+如果需要，退回這個最小 repo-native 骨架再補策略邏輯：
+{skeleton}
 """
+
+    def _repo_contract_prompt_block(self) -> str:
+        """回傳與本 repo BaseStrategy 對齊的硬性契約。"""
+        return """- BaseStrategy 定義在 strategies/base.py。
+- BaseStrategy 的 __init__ 只有 name 參數；正確寫法是 super().__init__(name=...)
+- BaseStrategy 唯一強制抽象方法是 generate_signals(self, data: pd.DataFrame) -> pd.DataFrame
+- required_indicators 不是抽象方法；可在 __init__ 設為 list，或用 @property 回傳 list
+- get_params() 是可選的；只有策略有可調參數時才需要覆寫
+- prepare_data() 是可選的前處理 hook
+- generate_signals 回傳的 DataFrame 必須至少包含 signal 欄位；若原始資料有 datetime，應保留；若沒有，請建立 datetime 欄位
+- SignalType 定義在 strategies/base.py，使用 SignalType.BUY / HOLD / SELL
+- 不要依賴 repo 不存在的框架欄位，例如 self.config、self.params
+- calculate_signals 不是框架要求；除非實作真的需要，否則不要新增
+"""
+
+    def _repo_native_class_skeleton(self, spec: StrategySpec) -> str:
+        """提供最小可用、與本 repo 契約對齊的骨架。"""
+        class_name = self._sanitize_strategy_class_name(spec.name)
+        return f"""from strategies.base import BaseStrategy, SignalType
+import pandas as pd
+
+class {class_name}(BaseStrategy):
+    def __init__(self, name: str | None = None):
+        super().__init__(name=name or {spec.name!r})
+        self.required_indicators = []
+
+    def get_params(self) -> dict:
+        return {{}}
+
+    def generate_signals(self, data: pd.DataFrame) -> pd.DataFrame:
+        df = data.copy()
+        if \"datetime\" not in df.columns:
+            df[\"datetime\"] = df.index
+        df[\"signal\"] = SignalType.HOLD
+        return df
+"""
+
+    def _sanitize_strategy_class_name(self, name: str) -> str:
+        """將策略名稱轉成穩定的 Python class 名稱。"""
+        tokens = re.findall(r"[A-Za-z0-9]+", name or "")
+        if not tokens:
+            return "GeneratedStrategy"
+        normalized = "".join(token.capitalize() for token in tokens)
+        if not normalized.endswith("Strategy"):
+            normalized += "Strategy"
+        return normalized
 
     def _parse_json_response(self, content: str) -> Dict[str, Any]:
         """從模型回應中提取 JSON。"""
