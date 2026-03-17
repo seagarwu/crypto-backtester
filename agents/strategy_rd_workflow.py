@@ -91,6 +91,7 @@ class RDConfig:
     
     # 迭代限制
     max_iterations: int = 5
+    max_engineer_attempts_per_iteration: int = 3
     
     # 數據目錄
     data_dir: str = "data"
@@ -466,110 +467,117 @@ class StrategyRDWorkflow:
                 identity=identity,
             )
 
-            feedback = self._build_iteration_feedback(
-                validation=self.iterations[-1]["validation"] if self.iterations else None,
-                evaluation=self.iterations[-1]["evaluation"] if self.iterations else None,
-                human_decision=self.pending_human_decision,
-            )
+            logger.info("\n[2/5] Engineer Agent 生成/修正策略代碼...")
             prior_attempts = [
                 item.get("engineer_attempt", {})
                 for item in self.iterations
                 if item.get("engineer_attempt")
             ]
-            reference_context = self._build_reference_context(strategy, feedback, prior_attempts)
-            technique_decision = self._build_engineer_technique_decision(
-                iteration=iteration,
-                strategy=strategy,
-                feedback=feedback,
-                prior_attempts=prior_attempts,
-                reference_context=reference_context,
-            )
-
-            logger.info("\n[2/5] Engineer Agent 生成/修正策略代碼...")
-            technique = technique_decision.technique
-            if technique is EngineerTechnique.DETERMINISTIC_TEMPLATE and iteration > 1 and self.current_code:
-                logger.info("   使用 deterministic route 重新生成代碼，不走自由修補")
-            logger.info("   技法: %s", technique.value)
-            if technique_decision.reasons:
-                logger.info("   決策依據: %s", " | ".join(technique_decision.reasons))
-
-            session_result = self.engineer_session.run(
-                EngineerSessionInput(
-                    strategy_handoff_path=str(self.research_writer.research_dir / "strategy_handoff.json"),
-                    technique=technique,
-                    md_context=md_context,
-                    previous_code=self.current_code,
-                    feedback=self._feedback_to_dict(feedback),
+            attempt_history = list(prior_attempts)
+            engineer_attempt = {}
+            validation = None
+            code_result = None
+            code_path = None
+            for engineer_attempt_number in range(1, self.config.max_engineer_attempts_per_iteration + 1):
+                feedback = self._build_iteration_feedback(
+                    validation=validation or (self.iterations[-1]["validation"] if self.iterations else None),
+                    evaluation=self.iterations[-1]["evaluation"] if self.iterations else None,
+                    human_decision=self.pending_human_decision,
+                )
+                reference_context = self._build_reference_context(strategy, feedback, attempt_history)
+                technique_decision = self._build_engineer_technique_decision(
+                    iteration=iteration,
+                    strategy=strategy,
+                    feedback=feedback,
+                    prior_attempts=attempt_history,
                     reference_context=reference_context,
-                    prior_attempts=prior_attempts,
-                ),
-                mode=EngineerExecutionMode(self.config.engineer_execution_mode),
-            )
-            code_result = session_result.code_result
+                )
+                technique = technique_decision.technique
+                logger.info("   嘗試 %s/%s | 技法: %s", engineer_attempt_number, self.config.max_engineer_attempts_per_iteration, technique.value)
+                if technique_decision.reasons:
+                    logger.info("   決策依據: %s", " | ".join(technique_decision.reasons))
 
-            code_path = artifact_dir / f"iteration_{iteration:02d}_{strategy.name}.py"
-            code_path = self._persist_code_artifact(code_path, code_result.code)
-            raw_path = artifact_dir / f"iteration_{iteration:02d}_{strategy.name}.raw.txt"
-            self._persist_raw_response_artifact(raw_path, code_result.raw_response)
-            validation = self._validate_generated_code(
-                filepath=str(code_path),
-                strategy_spec=strategy,
-                backtest_config=BacktestConfig(
-                    symbol=self.config.symbol,
-                    interval=self.config.interval,
-                    start_date=self.config.start_date,
-                    end_date=self.config.end_date,
-                    initial_capital=self.config.initial_capital,
-                ),
-            )
-            self.current_code = code_result.code
-            self.current_code_path = str(code_path)
-            self.research_writer.write_implementation_note(
-                iteration=iteration,
-                strategy_spec=strategy,
-                code_result=code_result,
-                validation=validation,
-                code_path=str(code_path),
-                reference_context=reference_context,
-                identity=identity,
-            )
-            self.research_writer.write_engineer_handoff(
-                iteration=iteration,
-                strategy_spec=strategy,
-                code_result=code_result,
-                validation=validation,
-                code_path=str(code_path),
-                reference_context=reference_context,
-                identity=identity,
-            )
-            engineer_attempt = {
-                "technique": technique.value,
-                "technique_reasons": list(technique_decision.reasons),
-                "preferred_reference_sources": list(technique_decision.preferred_reference_sources),
-                "failure_categories": list(validation.failure_categories),
-                "reference_context": reference_context,
-                "attempt_summary": session_result.attempt_summary,
-            }
-            self.research_writer.append_engineer_attempt(
-                iteration=iteration,
-                strategy_spec=strategy,
-                technique=technique.value,
-                validation=validation,
-                code_path=str(code_path),
-                identity=identity,
-                reference_context=reference_context,
-                attempt_summary=session_result.attempt_summary,
-                policy_decision={
+                session_result = self.engineer_session.run(
+                    EngineerSessionInput(
+                        strategy_handoff_path=str(self.research_writer.research_dir / "strategy_handoff.json"),
+                        technique=technique,
+                        md_context=md_context,
+                        previous_code=self.current_code,
+                        feedback=self._feedback_to_dict(feedback),
+                        reference_context=reference_context,
+                        prior_attempts=attempt_history,
+                    ),
+                    mode=EngineerExecutionMode(self.config.engineer_execution_mode),
+                )
+                code_result = session_result.code_result
+
+                code_path = artifact_dir / f"iteration_{iteration:02d}_attempt_{engineer_attempt_number:02d}_{strategy.name}.py"
+                code_path = self._persist_code_artifact(code_path, code_result.code)
+                raw_path = artifact_dir / f"iteration_{iteration:02d}_attempt_{engineer_attempt_number:02d}_{strategy.name}.raw.txt"
+                self._persist_raw_response_artifact(raw_path, code_result.raw_response)
+                validation = self._validate_generated_code(
+                    filepath=str(code_path),
+                    strategy_spec=strategy,
+                    backtest_config=BacktestConfig(
+                        symbol=self.config.symbol,
+                        interval=self.config.interval,
+                        start_date=self.config.start_date,
+                        end_date=self.config.end_date,
+                        initial_capital=self.config.initial_capital,
+                    ),
+                )
+                self.current_code = code_result.code
+                self.current_code_path = str(code_path)
+                self.research_writer.write_implementation_note(
+                    iteration=iteration,
+                    strategy_spec=strategy,
+                    code_result=code_result,
+                    validation=validation,
+                    code_path=str(code_path),
+                    reference_context=reference_context,
+                    identity=identity,
+                )
+                self.research_writer.write_engineer_handoff(
+                    iteration=iteration,
+                    strategy_spec=strategy,
+                    code_result=code_result,
+                    validation=validation,
+                    code_path=str(code_path),
+                    reference_context=reference_context,
+                    identity=identity,
+                )
+                engineer_attempt = {
+                    "attempt_number": engineer_attempt_number,
                     "technique": technique.value,
-                    "reasons": list(technique_decision.reasons),
+                    "technique_reasons": list(technique_decision.reasons),
                     "preferred_reference_sources": list(technique_decision.preferred_reference_sources),
-                },
-            )
-
-            if not validation.passed:
-                logger.warning("   代碼驗證失敗，進入下一輪修正")
+                    "failure_categories": list(validation.failure_categories),
+                    "reference_context": reference_context,
+                    "attempt_summary": session_result.attempt_summary,
+                }
+                self.research_writer.append_engineer_attempt(
+                    iteration=iteration,
+                    strategy_spec=strategy,
+                    technique=technique.value,
+                    validation=validation,
+                    code_path=str(code_path),
+                    identity=identity,
+                    reference_context=reference_context,
+                    attempt_summary=session_result.attempt_summary,
+                    policy_decision={
+                        "technique": technique.value,
+                        "reasons": list(technique_decision.reasons),
+                        "preferred_reference_sources": list(technique_decision.preferred_reference_sources),
+                    },
+                )
+                attempt_history.append(engineer_attempt)
+                if validation.passed:
+                    break
+                logger.warning("   代碼驗證失敗，繼續本輪內部修正")
                 for issue in validation.issues:
                     logger.warning(f"   - {issue}")
+
+            if not validation or not validation.passed:
                 self.iterations.append({
                     "iteration": iteration,
                     "identity": identity,
@@ -591,7 +599,7 @@ class StrategyRDWorkflow:
                     next_action=HumanDecisionAction.REVISE.value,
                 )
                 if iteration >= self.config.max_iterations:
-                    logger.warning("   已達最大迭代次數，停止優化")
+                    logger.warning("   已達最大策略迭代次數，停止優化")
                 continue
 
             self.current_validated_code_path = validation.filepath

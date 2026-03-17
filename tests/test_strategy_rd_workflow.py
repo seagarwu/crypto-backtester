@@ -6,6 +6,7 @@ Strategy R&D Workflow 測試
 import pytest
 import sys
 import os
+from types import SimpleNamespace
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -33,6 +34,7 @@ class TestRDConfig:
         assert config.interval == "1h"
         assert config.initial_capital == 10000.0
         assert config.max_iterations == 5
+        assert config.max_engineer_attempts_per_iteration == 3
         assert config.min_sharpe == 1.0
         assert config.engineer_execution_mode == "subprocess"
     
@@ -429,6 +431,47 @@ class TestStrategyRDWorkflow:
         assert (workflow.research_writer.research_dir / "engineer_attempt_log.json").exists()
         assert (workflow.research_writer.research_dir / "backtest_handoff.json").exists()
         assert (workflow.research_writer.research_dir / "evaluation_handoff.json").exists()
+
+    def test_engineer_retries_within_single_strategy_iteration(self, monkeypatch):
+        workflow = StrategyRDWorkflow(
+            RDConfig(
+                max_iterations=1,
+                max_engineer_attempts_per_iteration=3,
+                report_dir="reports/test_engineer_retry",
+            )
+        )
+
+        calls = {"count": 0}
+
+        def fake_run(session_input, mode):
+            calls["count"] += 1
+            attempt_no = calls["count"]
+            return SimpleNamespace(
+                code_result=EngineerCodeResult(
+                    code=f"class Broken{attempt_no}: pass",
+                    summary=f"attempt {attempt_no}",
+                    raw_response="raw",
+                ),
+                attempt_summary={"attempt_count": attempt_no},
+            )
+
+        def fake_validate(filepath, strategy_spec, backtest_config):
+            return CodeValidationResult(
+                passed=False,
+                filepath=filepath,
+                issues=["Syntax error: invalid syntax"],
+                failure_categories=["syntax"],
+            )
+
+        workflow.engineer_session.run = fake_run
+        workflow._validate_generated_code = fake_validate
+
+        report = workflow.run(initial_strategy=build_known_spec(), market_analysis="test")
+
+        assert report is None
+        assert calls["count"] == 3
+        assert len(workflow.iterations) == 1
+        assert workflow.iterations[0]["engineer_attempt"]["attempt_number"] == 3
 
 
 class FakeBacktester:
