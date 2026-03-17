@@ -197,12 +197,12 @@ class TestStrategyRDWorkflow:
         assert "syntax" in categories
         assert "smoke_backtest" in categories
 
-    def test_select_engineer_technique_uses_reference_guided_after_repeated_failures(self):
+    def test_build_engineer_technique_decision_uses_reference_guided_after_repeated_failures(self):
         workflow = StrategyRDWorkflow()
         spec = StrategySpec(name="Novel", description="x", indicators=["RSI"], parameters={})
         feedback = IterationFeedback(validation_issues=["Syntax error"])
 
-        technique = workflow._select_engineer_technique(
+        decision = workflow._build_engineer_technique_decision(
             iteration=3,
             strategy=spec,
             feedback=feedback,
@@ -210,9 +210,12 @@ class TestStrategyRDWorkflow:
                 {"failure_categories": ["syntax"]},
                 {"failure_categories": ["unknown"]},
             ],
+            reference_context={"sources": ["reference_cache"], "external_references": [{"name": "Ext Ref"}]},
         )
 
-        assert technique is EngineerTechnique.REFERENCE_GUIDED_SYNTHESIS
+        assert decision.technique is EngineerTechnique.REFERENCE_GUIDED_SYNTHESIS
+        assert "reference_cache" in decision.preferred_reference_sources
+        assert decision.reasons
 
     def test_build_iteration_feedback_includes_human_priorities(self):
         workflow = StrategyRDWorkflow()

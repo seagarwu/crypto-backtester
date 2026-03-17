@@ -125,6 +125,13 @@ class IterationFeedback:
     validation_issues: List[str] = field(default_factory=list)
 
 
+@dataclass
+class EngineerTechniqueDecision:
+    technique: EngineerTechnique
+    reasons: List[str] = field(default_factory=list)
+    preferred_reference_sources: List[str] = field(default_factory=list)
+
+
 class HumanDecisionAction(Enum):
     CONTINUE = "continue"
     REVISE = "revise"
@@ -306,13 +313,14 @@ class StrategyRDWorkflow:
             )
         )
 
-    def _select_engineer_technique(
+    def _build_engineer_technique_decision(
         self,
         iteration: int,
         strategy: StrategySpec,
         feedback: IterationFeedback,
         prior_attempts: List[Dict[str, Any]],
-    ) -> EngineerTechnique:
+        reference_context: Dict[str, Any],
+    ) -> EngineerTechniqueDecision:
         repeated_categories = [
             category
             for attempt in prior_attempts
@@ -320,15 +328,49 @@ class StrategyRDWorkflow:
         ]
         repeated_smoke = repeated_categories.count(EngineerFailureCategory.SMOKE_BACKTEST.value)
         repeated_syntax = repeated_categories.count(EngineerFailureCategory.SYNTAX.value)
+        reasons: List[str] = []
+        preferred_sources = list(reference_context.get("sources", []) or [])
         if self.route_decision and self.route_decision.route in (StrategyRoute.KNOWN, StrategyRoute.COMPOSABLE):
-            return EngineerTechnique.DETERMINISTIC_TEMPLATE
+            reasons.append(f"route={self.route_decision.route.value} favors deterministic repo-native generation")
+            return EngineerTechniqueDecision(
+                technique=EngineerTechnique.DETERMINISTIC_TEMPLATE,
+                reasons=reasons,
+                preferred_reference_sources=preferred_sources,
+            )
         if repeated_smoke >= 2:
-            return EngineerTechnique.CONSERVATIVE_FALLBACK
+            reasons.append("repeated smoke backtest failures favor conservative fallback")
+            return EngineerTechniqueDecision(
+                technique=EngineerTechnique.CONSERVATIVE_FALLBACK,
+                reasons=reasons,
+                preferred_reference_sources=preferred_sources,
+            )
+        if reference_context.get("external_references") and (repeated_syntax >= 1 or len(prior_attempts) >= 1):
+            reasons.append("external references available and failures repeated, so prefer reference-guided synthesis")
+            return EngineerTechniqueDecision(
+                technique=EngineerTechnique.REFERENCE_GUIDED_SYNTHESIS,
+                reasons=reasons,
+                preferred_reference_sources=preferred_sources,
+            )
         if repeated_syntax >= 1 or len(prior_attempts) >= 2:
-            return EngineerTechnique.REFERENCE_GUIDED_SYNTHESIS
+            reasons.append("repeated syntax/iteration failures require richer reference-guided repair")
+            return EngineerTechniqueDecision(
+                technique=EngineerTechnique.REFERENCE_GUIDED_SYNTHESIS,
+                reasons=reasons,
+                preferred_reference_sources=preferred_sources,
+            )
         if iteration == 1 or not self.current_code:
-            return EngineerTechnique.STRUCTURED_GENERATION
-        return EngineerTechnique.REPO_NATIVE_REPAIR
+            reasons.append("first attempt without stable code uses structured generation")
+            return EngineerTechniqueDecision(
+                technique=EngineerTechnique.STRUCTURED_GENERATION,
+                reasons=reasons,
+                preferred_reference_sources=preferred_sources,
+            )
+        reasons.append("existing code plus bounded failures favor repo-native repair")
+        return EngineerTechniqueDecision(
+            technique=EngineerTechnique.REPO_NATIVE_REPAIR,
+            reasons=reasons,
+            preferred_reference_sources=preferred_sources,
+        )
     
     def run(
         self,
@@ -435,12 +477,21 @@ class StrategyRDWorkflow:
                 if item.get("engineer_attempt")
             ]
             reference_context = self._build_reference_context(strategy, feedback, prior_attempts)
+            technique_decision = self._build_engineer_technique_decision(
+                iteration=iteration,
+                strategy=strategy,
+                feedback=feedback,
+                prior_attempts=prior_attempts,
+                reference_context=reference_context,
+            )
 
             logger.info("\n[2/5] Engineer Agent 生成/修正策略代碼...")
-            technique = self._select_engineer_technique(iteration, strategy, feedback, prior_attempts)
+            technique = technique_decision.technique
             if technique is EngineerTechnique.DETERMINISTIC_TEMPLATE and iteration > 1 and self.current_code:
                 logger.info("   使用 deterministic route 重新生成代碼，不走自由修補")
             logger.info("   技法: %s", technique.value)
+            if technique_decision.reasons:
+                logger.info("   決策依據: %s", " | ".join(technique_decision.reasons))
 
             session_result = self.engineer_session.run(
                 EngineerSessionInput(
@@ -493,6 +544,8 @@ class StrategyRDWorkflow:
             )
             engineer_attempt = {
                 "technique": technique.value,
+                "technique_reasons": list(technique_decision.reasons),
+                "preferred_reference_sources": list(technique_decision.preferred_reference_sources),
                 "failure_categories": list(validation.failure_categories),
                 "reference_context": reference_context,
                 "attempt_summary": session_result.attempt_summary,
@@ -506,6 +559,11 @@ class StrategyRDWorkflow:
                 identity=identity,
                 reference_context=reference_context,
                 attempt_summary=session_result.attempt_summary,
+                policy_decision={
+                    "technique": technique.value,
+                    "reasons": list(technique_decision.reasons),
+                    "preferred_reference_sources": list(technique_decision.preferred_reference_sources),
+                },
             )
 
             if not validation.passed:

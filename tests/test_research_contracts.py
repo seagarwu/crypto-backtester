@@ -263,12 +263,14 @@ class TestResearchArtifactWriter:
             },
             reference_context={"repo_patterns": [{"pattern": "multi_timeframe_bband_reversion"}]},
             attempt_summary={"attempt_count": 1},
+            policy_decision={"reasons": ["external references available"]},
         )
 
         payload = json.loads(path.read_text(encoding="utf-8"))
         assert payload[0]["technique"] == "reference_guided_synthesis"
         assert payload[0]["failure_categories"] == ["smoke_backtest"]
         assert payload[0]["reference_context"]["repo_patterns"][0]["pattern"] == "multi_timeframe_bband_reversion"
+        assert payload[0]["policy_decision"]["reasons"] == ["external references available"]
 
     def test_append_engineer_reference_appends_curated_reference(self, tmp_path):
         writer = ResearchArtifactWriter(str(tmp_path / "research"))

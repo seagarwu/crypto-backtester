@@ -113,6 +113,7 @@ class ResearchArtifactWriter:
         identity: Optional[Dict[str, Any]] = None,
         reference_context: Optional[Dict[str, Any]] = None,
         attempt_summary: Optional[Dict[str, Any]] = None,
+        policy_decision: Optional[Dict[str, Any]] = None,
     ) -> Path:
         path = self.research_dir / "engineer_attempt_log.json"
         existing = []
@@ -135,6 +136,7 @@ class ResearchArtifactWriter:
                 "failure_categories": _to_serializable(getattr(validation, "failure_categories", [])),
                 "reference_context": _to_serializable(reference_context or {}),
                 "attempt_summary": _to_serializable(attempt_summary or {}),
+                "policy_decision": _to_serializable(policy_decision or {}),
             }
         )
         return _write_text(path, json.dumps(existing, ensure_ascii=False, indent=2) + "\n")
