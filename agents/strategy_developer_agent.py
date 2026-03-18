@@ -21,9 +21,6 @@ import ast
 # 確保可以匯入模組
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# 直接從 core 匯入
-from core.llm_manager import get_llm
-from agents.agent_prompting import build_agent_context, build_engineer_system_prompt
 try:
     from langchain_core.messages import HumanMessage, SystemMessage
 except ModuleNotFoundError:
@@ -106,6 +103,9 @@ class EngineerCodeResult:
     summary: str = ""
     assumptions: List[str] = field(default_factory=list)
     raw_response: str = ""
+    backend_name: str = ""
+    request_metadata: Dict[str, Any] = field(default_factory=dict)
+    response_metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 class StrategyDeveloperAgent:
@@ -119,10 +119,16 @@ class StrategyDeveloperAgent:
         self,
         model: str = "gemini-2.5-pro",
         temperature: float = 0.8,
+        engineer_backend: Optional[str] = None,
+        engineer_system_prompt_style: str = "default",
+        engineer_max_tokens: int = 2000,
     ):
         self.model = model
         self.temperature = temperature
         self.llm = None
+        self.engineer_backend = engineer_backend or os.environ.get("ENGINEER_BACKEND", "third_party_mcp_stdio")
+        self.engineer_system_prompt_style = engineer_system_prompt_style
+        self.engineer_max_tokens = engineer_max_tokens
         
         # 系統 Prompt
         self.system_prompt = AGENT_PROMPTS.get(
@@ -143,13 +149,34 @@ class StrategyDeveloperAgent:
     def _get_llm(self):
         """懒加载 LLM"""
         if self.llm is None:
+            from core.llm_manager import get_llm
             # 使用便捷函数，直接传递模型参数
             self.llm = get_llm(
                 model_name=self.model,
                 temperature=self.temperature,
-                max_tokens=2000,
+                max_tokens=self.engineer_max_tokens,
             )
         return self.llm
+
+    def _get_engineer_backend(self, llm: Any = None):
+        from agents.engineer_backends import get_engineer_backend
+
+        if self.engineer_backend == "openai_compatible":
+            llm = llm or self._get_llm()
+        return get_engineer_backend(self.engineer_backend, llm=llm)
+
+    def _invoke_engineer_backend(self, system_prompt: str, user_prompt: str):
+        from agents.engineer_backends import EngineerBackendRequest
+
+        backend = self._get_engineer_backend()
+        request = EngineerBackendRequest(
+            model=self.model,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            temperature=self.temperature,
+            max_tokens=self.engineer_max_tokens,
+        )
+        return backend.generate(request)
     
     def develop_strategy(
         self,
@@ -388,11 +415,24 @@ class StrategyDeveloperAgent:
         """生成策略代碼並保留原始模型輸出，便於 fallback debug。"""
         llm = self._get_llm()
         context = self._extract_strategy_context(md_context)
-        system_prompt = build_engineer_system_prompt()
+        from agents.agent_prompting import build_engineer_system_prompt
+        system_prompt = build_engineer_system_prompt(style=self.engineer_system_prompt_style)
+        prompt = self._build_legacy_code_prompt(spec=spec, context=context)
+
+        try:
+            backend_response = self._invoke_engineer_backend(system_prompt, prompt)
+            raw = backend_response.raw_response
+            code = self._clean_code_block(raw)
+            return code.strip(), raw
+        except Exception as e:
+            logger.error(f"代碼生成失敗: {e}")
+            return "", ""
+
+    def _build_legacy_code_prompt(self, spec: StrategySpec, context: str) -> str:
+        """建立舊式單段 code-only prompt，供 probe A/B 比較。"""
         repo_contract = self._repo_contract_prompt_block()
         skeleton = self._repo_native_class_skeleton(spec)
-
-        prompt = f"""任務：根據下列策略規格，直接輸出完整可執行的 Python 原始碼。
+        return f"""任務：根據下列策略規格，直接輸出完整可執行的 Python 原始碼。
 
 Repo 契約：
 {repo_contract}
@@ -408,7 +448,7 @@ Repo 契約：
 8. generate_signals 必須回傳 pandas.DataFrame，至少包含 datetime 與 signal 欄位。
 9. 不要使用未定義的 self.config、self.params 或其他框架中不存在的屬性。
 10. calculate_signals 不是框架要求，除非真的需要，不要額外發明。
-8. 只允許使用 Python 標準庫、pandas、numpy 與 repo 內模組；禁止使用 pandas_ta、ta-lib、backtrader、vectorbt 或其他額外第三方套件。
+11. 只允許使用 Python 標準庫、pandas、numpy 與 repo 內模組；禁止使用 pandas_ta、ta-lib、backtrader、vectorbt 或其他額外第三方套件。
 
 策略規格：
 - 名稱: {spec.name}
@@ -427,15 +467,6 @@ Repo 契約：
 {skeleton}
 """
 
-        try:
-            response = self._invoke_engineer_llm(llm, system_prompt, prompt)
-            raw = response.content if hasattr(response, "content") else str(response)
-            code = self._clean_code_block(raw)
-            return code.strip(), raw
-        except Exception as e:
-            logger.error(f"代碼生成失敗: {e}")
-            return "", ""
-
     def generate_strategy_code_structured(
         self,
         spec: StrategySpec,
@@ -444,9 +475,10 @@ Repo 契約：
         previous_code: str = "",
     ) -> EngineerCodeResult:
         """生成結構化代碼輸出，便於後續驗證與迭代。"""
-        llm = self._get_llm()
         context = self._extract_strategy_context(md_context)
         feedback_text = json.dumps(feedback or {}, ensure_ascii=False, indent=2)
+        from agents.agent_prompting import build_engineer_system_prompt
+        system_prompt = build_engineer_system_prompt(style=self.engineer_system_prompt_style)
         prompt = self._build_structured_code_prompt(
             spec=spec,
             context=context,
@@ -454,16 +486,20 @@ Repo 契約：
             previous_code=previous_code,
         )
 
+        backend_response = None
         try:
-            response = llm.invoke(prompt)
-            raw = response.content if hasattr(response, "content") else str(response)
+            backend_response = self._invoke_engineer_backend(system_prompt, prompt)
+            raw = backend_response.raw_response
             data = self._parse_structured_response(raw)
-            code = self._clean_code_block(str(data.get("code", "")))
+            code = self._normalize_structured_code(str(data.get("code", "")))
             return EngineerCodeResult(
                 code=code,
                 summary=str(data.get("summary", "")),
                 assumptions=[str(item) for item in data.get("assumptions", [])],
                 raw_response=raw,
+                backend_name=backend_response.backend_name,
+                request_metadata=backend_response.request_metadata,
+                response_metadata=backend_response.response_metadata,
             )
         except Exception as e:
             logger.error(f"結構化代碼生成失敗: {e}")
@@ -476,6 +512,9 @@ Repo 契約：
                 summary="Fallback to legacy code generation",
                 assumptions=[],
                 raw_response=self._merge_raw_responses(raw if 'raw' in locals() else "", fallback_raw),
+                backend_name=getattr(backend_response, "backend_name", self.engineer_backend),
+                request_metadata=dict(getattr(backend_response, "request_metadata", {}) or {}),
+                response_metadata=dict(getattr(backend_response, "response_metadata", {}) or {}),
             )
 
     def revise_strategy_code(
@@ -486,9 +525,10 @@ Repo 契約：
         md_context: str = None,
     ) -> EngineerCodeResult:
         """根據上一輪 feedback 修正策略程式碼。"""
-        llm = self._get_llm()
         context = self._extract_strategy_context(md_context)
         feedback_text = json.dumps(feedback or {}, ensure_ascii=False, indent=2)
+        from agents.agent_prompting import build_engineer_system_prompt
+        system_prompt = build_engineer_system_prompt(style=self.engineer_system_prompt_style)
         prompt = self._build_revision_prompt(
             spec=spec,
             context=context,
@@ -496,16 +536,20 @@ Repo 契約：
             previous_code=previous_code,
         )
 
+        backend_response = None
         try:
-            response = llm.invoke(prompt)
-            raw = response.content if hasattr(response, "content") else str(response)
+            backend_response = self._invoke_engineer_backend(system_prompt, prompt)
+            raw = backend_response.raw_response
             data = self._parse_structured_response(raw)
-            code = self._clean_code_block(str(data.get("code", "")))
+            code = self._normalize_structured_code(str(data.get("code", "")))
             return EngineerCodeResult(
                 code=code,
                 summary=str(data.get("summary", "")),
                 assumptions=[str(item) for item in data.get("assumptions", [])],
                 raw_response=raw,
+                backend_name=backend_response.backend_name,
+                request_metadata=backend_response.request_metadata,
+                response_metadata=backend_response.response_metadata,
             )
         except Exception as e:
             logger.error(f"修正代碼生成失敗: {e}")
@@ -518,6 +562,9 @@ Repo 契約：
                 summary="Fallback to legacy regeneration after revision failure",
                 assumptions=[],
                 raw_response=self._merge_raw_responses(raw if 'raw' in locals() else "", fallback_raw),
+                backend_name=getattr(backend_response, "backend_name", self.engineer_backend),
+                request_metadata=dict(getattr(backend_response, "request_metadata", {}) or {}),
+                response_metadata=dict(getattr(backend_response, "response_metadata", {}) or {}),
             )
 
     def _build_structured_code_prompt(
@@ -773,6 +820,17 @@ class {class_name}(BaseStrategy):
         extracted = self._extract_python_code(code)
         return extracted or code
 
+    def _normalize_structured_code(self, code: str) -> str:
+        """對已明確落在 <CODE> 區塊內的內容，只做輕量清理，避免過度裁切。"""
+        code = code.strip()
+        if code.startswith("```python"):
+            code = code[10:]
+        elif code.startswith("```"):
+            code = code[3:]
+        if code.endswith("```"):
+            code = code[:-3]
+        return code.strip()
+
     def _merge_raw_responses(self, primary_raw: str, fallback_raw: str) -> str:
         """保留 structured / fallback 兩段原始輸出，方便事後比對。"""
         parts = []
@@ -946,9 +1004,10 @@ class {class_name}(BaseStrategy):
 # 便捷函數
 def create_strategy_developer(
     model: str = "gemini-2.5-pro",
+    engineer_backend: Optional[str] = None,
 ) -> StrategyDeveloperAgent:
     """建立策略研發 Agent"""
-    return StrategyDeveloperAgent(model=model)
+    return StrategyDeveloperAgent(model=model, engineer_backend=engineer_backend)
 
 
 __all__ = [

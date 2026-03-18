@@ -47,16 +47,28 @@ class TestStrategyDeveloperAgent:
     
     def test_agent_init(self):
         agent = StrategyDeveloperAgent()
-        
+
         assert agent.model == "gemini-2.5-pro"
         assert agent.temperature == 0.8
         assert agent.llm is None  # 懒加载
+        assert agent.engineer_backend == "third_party_mcp_stdio"
     
     def test_agent_with_custom_model(self):
         agent = StrategyDeveloperAgent(model="gpt-4", temperature=0.5)
         
         assert agent.model == "gpt-4"
         assert agent.temperature == 0.5
+
+    def test_agent_uses_explicit_engineer_backend_name(self):
+        agent = StrategyDeveloperAgent(engineer_backend="google_genai")
+
+        assert agent.engineer_backend == "google_genai"
+
+    def test_agent_accepts_engineer_prompt_style_and_max_tokens(self):
+        agent = StrategyDeveloperAgent(engineer_system_prompt_style="compact", engineer_max_tokens=3000)
+
+        assert agent.engineer_system_prompt_style == "compact"
+        assert agent.engineer_max_tokens == 3000
     
     def test_diagnose_results_good(self):
         agent = StrategyDeveloperAgent()
@@ -262,8 +274,25 @@ class DemoStrategy(BaseStrategy):
         assert code.startswith("from strategies.base import BaseStrategy")
         assert code.endswith("pass")
 
-    def test_generate_strategy_code_structured_preserves_raw_on_fallback(self):
+    def test_normalize_structured_code_preserves_complete_code_block(self):
         agent = StrategyDeveloperAgent()
+        raw = """from strategies.base import BaseStrategy, SignalType
+import pandas as pd
+
+class DemoStrategy(BaseStrategy):
+    def generate_signals(self, data: pd.DataFrame) -> pd.DataFrame:
+        df = data.copy()
+        df['signal'] = SignalType.HOLD
+        return df
+"""
+
+        code = agent._normalize_structured_code(raw)
+
+        assert "class DemoStrategy" in code
+        assert "return df" in code
+
+    def test_generate_strategy_code_structured_preserves_raw_on_fallback(self):
+        agent = StrategyDeveloperAgent(engineer_backend="openai_compatible")
         spec = StrategySpec(name="Demo", description="demo")
 
         class FakeLLM:
@@ -304,8 +333,83 @@ class DemoStrategy(BaseStrategy):
         assert "[legacy_fallback]" in result.raw_response
         assert "這不是合法 structured response" in result.raw_response
 
+    def test_generate_strategy_code_structured_preserves_backend_metadata_on_fallback(self):
+        agent = StrategyDeveloperAgent(engineer_backend="google_genai")
+        spec = StrategySpec(name="Demo", description="demo")
+
+        def fake_backend(system_prompt, user_prompt):
+            return SimpleNamespace(
+                backend_name="google_genai",
+                raw_response="這不是合法 structured response",
+                request_metadata={"path": "google_generate_content"},
+                response_metadata={"finish_reason": "FinishReason.MAX_TOKENS"},
+            )
+
+        class FakeLLM:
+            def invoke(self, prompt):
+                return SimpleNamespace(
+                    content="""from strategies.base import BaseStrategy, SignalType
+import pandas as pd
+
+class DemoStrategy(BaseStrategy):
+    def generate_signals(self, data: pd.DataFrame) -> pd.DataFrame:
+        df = data.copy()
+        if "datetime" not in df.columns:
+            df["datetime"] = df.index
+        df["signal"] = SignalType.HOLD
+        return df
+"""
+                )
+
+        agent._invoke_engineer_backend = fake_backend
+        agent.llm = FakeLLM()
+
+        result = agent.generate_strategy_code_structured(spec)
+
+        assert result.backend_name == "google_genai"
+        assert result.request_metadata["path"] == "google_generate_content"
+        assert result.response_metadata["finish_reason"] == "FinishReason.MAX_TOKENS"
+
+    def test_generate_strategy_code_structured_carries_backend_metadata(self):
+        agent = StrategyDeveloperAgent(engineer_backend="third_party_mcp_stdio")
+        spec = StrategySpec(name="Demo", description="demo")
+
+        def fake_invoke(system_prompt, user_prompt):
+            return SimpleNamespace(
+                backend_name="third_party_mcp_stdio",
+                raw_response="""<SUMMARY>
+ok
+</SUMMARY>
+<ASSUMPTIONS>
+- none
+</ASSUMPTIONS>
+<CODE>
+from strategies.base import BaseStrategy, SignalType
+import pandas as pd
+
+class DemoStrategy(BaseStrategy):
+    def generate_signals(self, data: pd.DataFrame) -> pd.DataFrame:
+        df = data.copy()
+        if "datetime" not in df.columns:
+            df["datetime"] = df.index
+        df["signal"] = SignalType.HOLD
+        return df
+</CODE>""",
+                request_metadata={"path": "mcp_stdio_generate_text"},
+                response_metadata={"finishReason": "STOP"},
+            )
+
+        agent._invoke_engineer_backend = fake_invoke
+
+        result = agent.generate_strategy_code_structured(spec)
+
+        assert result.backend_name == "third_party_mcp_stdio"
+        assert result.request_metadata["path"] == "mcp_stdio_generate_text"
+        assert result.response_metadata["finishReason"] == "STOP"
+        assert "class DemoStrategy" in result.code
+
     def test_revise_strategy_code_does_not_reuse_previous_broken_code(self):
-        agent = StrategyDeveloperAgent()
+        agent = StrategyDeveloperAgent(engineer_backend="openai_compatible")
         spec = StrategySpec(name="Demo", description="demo")
         previous_code = "class BrokenStrategy("
 

@@ -44,3 +44,17 @@ class TestAgentPrompting:
         assert "strategies/base.py" in content
         assert "strategies/ma_crossover.py" in content
         assert "remote engineer model cannot directly use MCP tools" in content
+
+    def test_build_engineer_system_prompt_openhands_variant_includes_safety_checks(self):
+        content = build_engineer_system_prompt(style="openhands_inspired")
+
+        assert "cautious Python quant-strategy engineer" in content
+        assert "Avoid look-ahead bias" in content
+        assert "Inside <CODE>, output one complete Python file" in content
+
+    def test_build_engineer_system_prompt_compact_variant_is_shorter(self):
+        default = build_engineer_system_prompt(style="default")
+        compact = build_engineer_system_prompt(style="compact")
+
+        assert "Return one repo-valid strategy file" in compact
+        assert len(compact) < len(default)

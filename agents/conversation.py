@@ -160,7 +160,10 @@ class ConversationalStrategyDeveloper:
         self.evaluator_model = evaluator_model or model
         self.reporter_model = reporter_model or model
 
-        self.developer = StrategyDeveloperAgent(model=self.engineer_model)
+        self.developer = StrategyDeveloperAgent(
+            model=self.engineer_model,
+            engineer_backend=os.environ.get("ENGINEER_BACKEND", "third_party_mcp_stdio"),
+        )
         self.evaluator = create_strategy_evaluator(model=self.evaluator_model)
         self.runner = create_backtest_runner()
         self.reporter = ReporterAgent(model=self.reporter_model)

@@ -104,6 +104,7 @@ class RDConfig:
 
     # Engineer execution model
     engineer_execution_mode: str = "subprocess"
+    engineer_backend: str = "third_party_mcp_stdio"
 
 
 @dataclass
@@ -183,7 +184,7 @@ class StrategyRDWorkflow:
         self.research_writer.ensure_workspace()
         
         # 初始化所有 Agents
-        self.developer = StrategyDeveloperAgent()
+        self.developer = StrategyDeveloperAgent(engineer_backend=self.config.engineer_backend)
         self.reference_provider = CompositeEngineerReferenceProvider(
             providers=[
                 RepoPatternReferenceProvider(),

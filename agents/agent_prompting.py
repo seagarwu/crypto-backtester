@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Literal, Tuple
 
 
 PROMPTS_ROOT = Path(__file__).resolve().parent / "prompts"
@@ -87,8 +87,11 @@ def load_bootstrap_context(agent_name: str) -> str:
     return "\n".join(lines)
 
 
-def build_engineer_system_prompt(project_root: str | None = None) -> str:
-    sections: List[Tuple[str, str]] = [
+EngineerPromptStyle = Literal["default", "openhands_inspired", "compact"]
+
+
+def _build_default_engineer_sections(project_root: str | None = None) -> List[Tuple[str, str]]:
+    return [
         (
             "Identity",
             "You are the engineer agent for this repository. Your job is to produce repo-native strategy code that passes local validation, not to brainstorm or narrate.",
@@ -107,6 +110,102 @@ def build_engineer_system_prompt(project_root: str | None = None) -> str:
             "Return only the requested structured sections. Do not add markdown fences, explanations, or alternative implementations outside the required format.",
         ),
     ]
+
+
+def _build_openhands_inspired_engineer_sections(project_root: str | None = None) -> List[Tuple[str, str]]:
+    return [
+        (
+            "Identity",
+            "You are a cautious Python quant-strategy engineer. Your job is to return a complete, runnable, repo-native strategy implementation that can survive validation, not a partial draft.",
+        ),
+        (
+            "Operating Mode",
+            "Work like a disciplined coding agent: first reconcile the repo contract, then mentally plan the data flow and method boundaries, then emit one complete implementation. Never stop at a sketch, outline, or half-written class.",
+        ),
+        ("Repo Rules", load_repo_rules(project_root=project_root)),
+        ("Agent Rules", load_agent_instructions("engineer_agent")),
+        ("Tool Capabilities", SHARED_TOOL_CAPABILITIES.strip()),
+        (
+            "Workflow Hints",
+            "\n".join(
+                [
+                    AGENT_TOOL_HINTS.get("engineer_agent", "").strip(),
+                    "- Before emitting code, mentally check assumptions, edge cases, and repo invariants, but do not print that private reasoning.",
+                    "- When strategy logic is simple, prefer a small deterministic implementation over an ambitious abstraction.",
+                    "- A response is incorrect if the class, __init__, or generate_signals body is incomplete or truncated.",
+                ]
+            ).strip(),
+        ),
+        ("Bootstrap Files", load_bootstrap_context("engineer_agent")),
+        (
+            "Strategy Safety Checklist",
+            "\n".join(
+                [
+                    "- Avoid look-ahead bias; only use information available at each row.",
+                    "- Keep index / datetime alignment explicit.",
+                    "- Handle NaN warmup rows safely.",
+                    "- Respect fees, slippage, and boundary conditions when strategy logic depends on them.",
+                    "- Do not invent framework helpers or config objects that this repo does not define.",
+                ]
+            ),
+        ),
+        (
+            "Output Discipline",
+            "\n".join(
+                [
+                    "Return only the requested structured sections.",
+                    "Do not add markdown fences, explanations, or alternative implementations outside the required format.",
+                    "Do not emit a section unless you can complete it.",
+                    "Inside <CODE>, output one complete Python file from the first import to the final return statement.",
+                ]
+            ),
+        ),
+    ]
+
+
+def _build_compact_engineer_sections(project_root: str | None = None) -> List[Tuple[str, str]]:
+    return [
+        (
+            "Identity",
+            "You are the engineer agent for this repository. Return one repo-valid strategy file, not analysis.",
+        ),
+        ("Repo Rules", load_repo_rules(project_root=project_root)),
+        (
+            "Contract",
+            "\n".join(
+                [
+                    "- Inherit BaseStrategy from strategies/base.py.",
+                    "- Implement generate_signals(self, data: pd.DataFrame) -> pd.DataFrame.",
+                    "- Return a DataFrame with at least datetime and signal.",
+                    "- Do not use self.config, self.params, or non-repo framework helpers.",
+                    "- Do not import pandas_ta, ta-lib, backtrader, or vectorbt.",
+                ]
+            ),
+        ),
+        (
+            "Output Discipline",
+            "\n".join(
+                [
+                    "Return exactly <SUMMARY>, <ASSUMPTIONS>, and <CODE>.",
+                    "Inside <CODE>, output one complete Python file.",
+                    "Do not output markdown fences or extra explanation.",
+                ]
+            ),
+        ),
+    ]
+
+
+def build_engineer_system_prompt(
+    project_root: str | None = None,
+    style: EngineerPromptStyle = "default",
+) -> str:
+    if style == "openhands_inspired":
+        sections = _build_openhands_inspired_engineer_sections(project_root=project_root)
+    elif style == "compact":
+        sections = _build_compact_engineer_sections(project_root=project_root)
+    else:
+        sections = _build_default_engineer_sections(project_root=project_root)
+
     rendered = []
     for title, content in sections:
         if not content:
