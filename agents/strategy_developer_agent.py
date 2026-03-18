@@ -23,7 +23,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # 直接從 core 匯入
 from core.llm_manager import get_llm
-from agents.agent_prompting import build_agent_context
+from agents.agent_prompting import build_agent_context, build_engineer_system_prompt
+try:
+    from langchain_core.messages import HumanMessage, SystemMessage
+except ModuleNotFoundError:
+    HumanMessage = None
+    SystemMessage = None
 
 # Agent 角色定義（避免循環導入）
 from enum import Enum
@@ -383,16 +388,11 @@ class StrategyDeveloperAgent:
         """生成策略代碼並保留原始模型輸出，便於 fallback debug。"""
         llm = self._get_llm()
         context = self._extract_strategy_context(md_context)
-        agent_context = build_agent_context("engineer_agent")
+        system_prompt = build_engineer_system_prompt()
         repo_contract = self._repo_contract_prompt_block()
         skeleton = self._repo_native_class_skeleton(spec)
 
-        prompt = f"""你是一個專業的量化交易策略工程師。
-
-任務：根據下列策略規格，直接輸出完整可執行的 Python 原始碼。
-
-工程規則與工具上下文：
-{agent_context or '無'}
+        prompt = f"""任務：根據下列策略規格，直接輸出完整可執行的 Python 原始碼。
 
 Repo 契約：
 {repo_contract}
@@ -428,7 +428,7 @@ Repo 契約：
 """
 
         try:
-            response = llm.invoke(prompt)
+            response = self._invoke_engineer_llm(llm, system_prompt, prompt)
             raw = response.content if hasattr(response, "content") else str(response)
             code = self._clean_code_block(raw)
             return code.strip(), raw
@@ -528,16 +528,10 @@ Repo 契約：
         previous_code: str,
     ) -> str:
         """建立首輪或全量重生成 prompt。"""
-        agent_context = build_agent_context("engineer_agent")
         repo_contract = self._repo_contract_prompt_block()
         skeleton = self._repo_native_class_skeleton(spec)
-        return f"""你是一個專業的量化交易策略工程師。
-
-請根據策略規格、前一輪代碼與 feedback，輸出嚴格的三個區塊。
+        return f"""請根據策略規格、前一輪代碼與 feedback，輸出嚴格的三個區塊。
 不要輸出 markdown，不要輸出額外說明，不要輸出 JSON。
-
-工程規則與工具上下文：
-{agent_context or '無'}
 
 Repo 契約：
 {repo_contract}
@@ -605,16 +599,10 @@ Repo 契約：
         previous_code: str,
     ) -> str:
         """建立修補導向 prompt，避免每輪重寫整份 class。"""
-        agent_context = build_agent_context("engineer_agent")
         repo_contract = self._repo_contract_prompt_block()
         skeleton = self._repo_native_class_skeleton(spec)
-        return f"""你是一個 Python 策略修復工程師。
-
-你的任務不是重寫整份策略，而是基於現有代碼做最小必要修正，讓它通過驗證。
+        return f"""你的任務不是重寫整份策略，而是基於現有代碼做最小必要修正，讓它通過驗證。
 請保留現有 class 名稱、參數名稱與主要策略邏輯，只修復 feedback 指出的問題。
-
-工程規則與工具上下文：
-{agent_context or '無'}
 
 Repo 契約：
 {repo_contract}
@@ -670,6 +658,18 @@ Repo 契約：
 如果需要，退回這個最小 repo-native 骨架再補策略邏輯：
 {skeleton}
 """
+
+    def _invoke_engineer_llm(self, llm, system_prompt: str, user_prompt: str):
+        """Use an explicit system prompt when the backend supports chat messages."""
+        if SystemMessage is None or HumanMessage is None:
+            combined_prompt = f"{system_prompt}\n\n{user_prompt}".strip()
+            return llm.invoke(combined_prompt)
+        return llm.invoke(
+            [
+                SystemMessage(content=system_prompt),
+                HumanMessage(content=user_prompt),
+            ]
+        )
 
     def _repo_contract_prompt_block(self) -> str:
         """回傳與本 repo BaseStrategy 對齊的硬性契約。"""

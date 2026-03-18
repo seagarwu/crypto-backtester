@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List, Tuple
 
 
 PROMPTS_ROOT = Path(__file__).resolve().parent / "prompts"
@@ -15,6 +15,21 @@ SHARED_TOOL_CAPABILITIES = """Shared Tool Capabilities:
 - Agent-specific AGENTS.md files define role-local constraints.
 - Prefer repo-local modules, deterministic templates, and validation feedback over speculative code.
 """
+
+ENGINEER_BOOTSTRAP_FILES: List[Tuple[str, str]] = [
+    (
+        "strategies/base.py",
+        "BaseStrategy only requires generate_signals(data)->DataFrame; super().__init__(name=...) is the correct initializer and get_params() is optional.",
+    ),
+    (
+        "strategies/ma_crossover.py",
+        "Repo-native example: parameters live in __init__, required_indicators is set on self, and generate_signals returns a DataFrame with signal.",
+    ),
+    (
+        "agents/prompts/engineer_agent/AGENTS.md",
+        "Engineer-specific operating rules override speculation: avoid undefined framework fields, preserve strategy intent, and keep code fully runnable.",
+    ),
+]
 
 AGENT_TOOL_HINTS: Dict[str, str] = {
     "strategy_agent": """Agent Workflow Hints:
@@ -59,12 +74,54 @@ def load_repo_rules(project_root: str | None = None) -> str:
     return ""
 
 
+def load_bootstrap_context(agent_name: str) -> str:
+    if agent_name != "engineer_agent":
+        return ""
+
+    lines = ["Bootstrap Files:"]
+    for path, summary in ENGINEER_BOOTSTRAP_FILES:
+        lines.append(f"- {path}: {summary}")
+    lines.append(
+        "- Runtime Note: the remote engineer model cannot directly use MCP tools; any external references must be supplied by the orchestrator as controlled context."
+    )
+    return "\n".join(lines)
+
+
+def build_engineer_system_prompt(project_root: str | None = None) -> str:
+    sections: List[Tuple[str, str]] = [
+        (
+            "Identity",
+            "You are the engineer agent for this repository. Your job is to produce repo-native strategy code that passes local validation, not to brainstorm or narrate.",
+        ),
+        (
+            "Operating Mode",
+            "Act like a constrained repository engineer: follow the repo contract first, preserve strategy intent, and prefer the smallest viable implementation that passes validation.",
+        ),
+        ("Repo Rules", load_repo_rules(project_root=project_root)),
+        ("Agent Rules", load_agent_instructions("engineer_agent")),
+        ("Tool Capabilities", SHARED_TOOL_CAPABILITIES.strip()),
+        ("Workflow Hints", AGENT_TOOL_HINTS.get("engineer_agent", "").strip()),
+        ("Bootstrap Files", load_bootstrap_context("engineer_agent")),
+        (
+            "Output Discipline",
+            "Return only the requested structured sections. Do not add markdown fences, explanations, or alternative implementations outside the required format.",
+        ),
+    ]
+    rendered = []
+    for title, content in sections:
+        if not content:
+            continue
+        rendered.append(f"## {title}\n{content}")
+    return "\n\n".join(rendered).strip()
+
+
 def build_agent_context(agent_name: str, project_root: str | None = None) -> str:
     sections: Dict[str, str] = {
         "Repo Rules": load_repo_rules(project_root=project_root),
         "Agent Rules": load_agent_instructions(agent_name),
         "Tool Capabilities": SHARED_TOOL_CAPABILITIES.strip(),
         "Workflow Hints": AGENT_TOOL_HINTS.get(agent_name, "").strip(),
+        "Bootstrap Files": load_bootstrap_context(agent_name),
     }
     rendered = []
     for title, content in sections.items():

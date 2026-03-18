@@ -1,5 +1,6 @@
 from agents.agent_prompting import (
     build_agent_context,
+    build_engineer_system_prompt,
     load_agent_instructions,
     load_repo_rules,
 )
@@ -34,3 +35,12 @@ class TestAgentPrompting:
 
         assert "validation failures as the primary input" in engineer_content
         assert "Highlight unresolved risks and human overrides" in reporter_content
+
+    def test_build_engineer_system_prompt_includes_bootstrap_files(self):
+        content = build_engineer_system_prompt()
+
+        assert "## Identity" in content
+        assert "## Bootstrap Files" in content
+        assert "strategies/base.py" in content
+        assert "strategies/ma_crossover.py" in content
+        assert "remote engineer model cannot directly use MCP tools" in content

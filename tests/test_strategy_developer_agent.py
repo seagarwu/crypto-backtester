@@ -157,9 +157,6 @@ class TestStrategyDeveloperAgent:
             previous_code="",
         )
 
-        assert "工程規則與工具上下文" in prompt
-        assert "Engineer Agent Rules" in prompt
-        assert "Shared Tool Capabilities" in prompt
         assert "BaseStrategy 唯一強制抽象方法是 generate_signals" in prompt
         assert "不要使用未定義的 self.config、self.params" in prompt
 
@@ -189,6 +186,24 @@ class TestStrategyDeveloperAgent:
         assert "def get_params(self) -> dict:" in skeleton
         assert "def generate_signals(self, data: pd.DataFrame) -> pd.DataFrame:" in skeleton
         assert "calculate_signals" not in skeleton
+
+    def test_invoke_engineer_llm_prefers_system_and_human_messages(self):
+        agent = StrategyDeveloperAgent()
+
+        captured = {}
+
+        class FakeLLM:
+            def invoke(self, payload):
+                captured["payload"] = payload
+                return SimpleNamespace(content="<CODE>from x import y</CODE>")
+
+        agent._invoke_engineer_llm(FakeLLM(), "system", "user")
+
+        payload = captured["payload"]
+        assert isinstance(payload, list)
+        assert len(payload) == 2
+        assert getattr(payload[0], "content", "") == "system"
+        assert getattr(payload[1], "content", "") == "user"
 
     def test_parse_structured_response(self):
         agent = StrategyDeveloperAgent()

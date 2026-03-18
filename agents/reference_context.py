@@ -79,7 +79,7 @@ class RepoPatternReferenceProvider(EngineerReferenceProvider):
             "repeated_failure_categories": repeated_categories,
             "guardrails": [
                 "Only use Python stdlib, pandas, numpy, and repo-local modules.",
-                "Return a full BaseStrategy subclass with required_indicators, calculate_signals, and generate_signals.",
+                "Return a full BaseStrategy subclass with a complete generate_signals implementation and repo-native initialization.",
                 "Prefer simple repo-native logic over novel dependencies when failures repeat.",
             ],
         }
