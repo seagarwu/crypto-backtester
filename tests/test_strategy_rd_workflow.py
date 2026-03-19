@@ -78,6 +78,28 @@ class TestStrategyRDWorkflow:
         
         assert workflow.config.symbol == "ETHUSDT"
         assert workflow.config.max_iterations == 3
+
+    def test_safe_strategy_filename_replaces_spaces_with_underscores(self):
+        workflow = StrategyRDWorkflow()
+
+        assert workflow._safe_strategy_filename("BTCUSDT MA策略") == "BTCUSDT_MA策略"
+
+    def test_promote_validated_strategy_creates_symlink(self, tmp_path):
+        workflow = StrategyRDWorkflow(
+            RDConfig(
+                report_dir=str(tmp_path / "reports"),
+                research_dir=str(tmp_path / "research"),
+            )
+        )
+        artifact = tmp_path / "reports" / "iterations" / "iteration_01_attempt_02_BTCUSDT_MA策略.py"
+        artifact.parent.mkdir(parents=True, exist_ok=True)
+        artifact.write_text("class DemoStrategy:\n    pass\n", encoding="utf-8")
+
+        link_path = workflow._promote_validated_strategy("BTCUSDT MA策略", str(artifact))
+
+        assert link_path.is_symlink()
+        assert link_path.name == "BTCUSDT_MA策略.py"
+        assert link_path.resolve() == artifact.resolve()
     
     def test_approve_strategy(self):
         """測試批准策略"""

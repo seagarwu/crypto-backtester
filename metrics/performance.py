@@ -11,6 +11,27 @@ from typing import List, Dict, Any, Optional
 from backtest import BacktestResult, Trade
 
 
+def _get_result_attr(result: Any, name: str, default: Any = None) -> Any:
+    """從不同回測結果型別中安全取值。"""
+    if hasattr(result, name):
+        return getattr(result, name)
+
+    config = getattr(result, "config", None)
+    if config is not None and hasattr(config, name):
+        return getattr(config, name)
+
+    return default
+
+
+def _trade_pnl(trade: Any) -> float:
+    """支援 dataclass Trade 與 dict trade payload。"""
+    if hasattr(trade, "pnl"):
+        return float(trade.pnl)
+    if isinstance(trade, dict):
+        return float(trade.get("pnl", 0.0))
+    return 0.0
+
+
 def calculate_returns(equity_curve: pd.DataFrame) -> pd.Series:
     """
     計算收益率序列
@@ -137,7 +158,7 @@ def calculate_win_rate(trades: List[Trade]) -> float:
     if not trades:
         return 0.0
 
-    wins = sum(1 for t in trades if t.pnl > 0)
+    wins = sum(1 for t in trades if _trade_pnl(t) > 0)
     return wins / len(trades)
 
 
@@ -154,8 +175,8 @@ def calculate_profit_factor(trades: List[Trade]) -> float:
     if not trades:
         return 0.0
 
-    total_profit = sum(t.pnl for t in trades if t.pnl > 0)
-    total_loss = abs(sum(t.pnl for t in trades if t.pnl < 0))
+    total_profit = sum(_trade_pnl(t) for t in trades if _trade_pnl(t) > 0)
+    total_loss = abs(sum(_trade_pnl(t) for t in trades if _trade_pnl(t) < 0))
 
     if total_loss == 0:
         return float("inf") if total_profit > 0 else 0.0
@@ -176,8 +197,8 @@ def calculate_avg_win_loss(trades: List[Trade]) -> float:
     if not trades:
         return 0.0
 
-    wins = [t.pnl for t in trades if t.pnl > 0]
-    losses = [t.pnl for t in trades if t.pnl < 0]
+    wins = [_trade_pnl(t) for t in trades if _trade_pnl(t) > 0]
+    losses = [_trade_pnl(t) for t in trades if _trade_pnl(t) < 0]
 
     if not wins or not losses:
         return 0.0
@@ -226,10 +247,23 @@ def calculate_metrics(
         包含所有指標的字典
     """
     # 基本資料
-    equity_curve = result.equity_curve
-    trades = result.trades
-    initial_capital = result.initial_capital
-    final_equity = result.final_equity
+    equity_curve = getattr(result, "equity_curve", None)
+    if equity_curve is None:
+        raise ValueError("result 缺少 equity_curve，無法計算績效指標")
+
+    trades = list(getattr(result, "trades", []) or [])
+
+    initial_capital = _get_result_attr(result, "initial_capital")
+    if initial_capital is None:
+        raise ValueError("result 缺少 initial_capital，無法計算績效指標")
+
+    final_equity = _get_result_attr(result, "final_equity")
+    if final_equity is None:
+        total_return_pct = getattr(result, "total_return", None)
+        if total_return_pct is not None:
+            final_equity = initial_capital * (1 + float(total_return_pct) / 100.0)
+        else:
+            raise ValueError("result 缺少 final_equity，無法計算績效指標")
 
     # 時間範圍
     if len(equity_curve) > 1:
@@ -261,8 +295,12 @@ def calculate_metrics(
 
     # 交易統計
     total_trades = len(trades)
-    winning_trades = sum(1 for t in trades if t.pnl > 0)
-    losing_trades = sum(1 for t in trades if t.pnl < 0)
+    winning_trades = int(
+        getattr(result, "winning_trades", sum(1 for t in trades if _trade_pnl(t) > 0))
+    )
+    losing_trades = int(
+        getattr(result, "losing_trades", sum(1 for t in trades if _trade_pnl(t) < 0))
+    )
     win_rate = calculate_win_rate(trades)
 
     # 盈利因子

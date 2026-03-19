@@ -56,6 +56,13 @@ AGENT_PROMPTS = {
 logger = logging.getLogger(__name__)
 
 
+def _normalize_threshold_metric(value: float, metric_name: str) -> float:
+    """接受 0-1 與百分比兩種輸入，統一為百分比尺度。"""
+    if metric_name in {"max_drawdown", "win_rate", "total_return"} and abs(value) <= 1:
+        return value * 100
+    return value
+
+
 class EvaluationResult(Enum):
     """評估結果"""
     PASS = "pass"
@@ -160,16 +167,16 @@ class StrategyEvaluatorAgent:
         if metrics is not None:
             # 從 metrics 字典獲取指標
             sharpe_ratio = metrics.get('sharpe_ratio', 0)
-            max_drawdown = metrics.get('max_drawdown', 0)
-            win_rate = metrics.get('win_rate', 0)
-            total_return = metrics.get('total_return', 0)
+            max_drawdown = _normalize_threshold_metric(metrics.get('max_drawdown', 0), 'max_drawdown')
+            win_rate = _normalize_threshold_metric(metrics.get('win_rate', 0), 'win_rate')
+            total_return = _normalize_threshold_metric(metrics.get('total_return', 0), 'total_return')
             profit_factor = metrics.get('profit_factor', 0)
         else:
             # 從 backtest_report 獲取指標（向後兼容）
             sharpe_ratio = getattr(backtest_report, 'sharpe_ratio', 0)
-            max_drawdown = getattr(backtest_report, 'max_drawdown', 0)
-            win_rate = getattr(backtest_report, 'win_rate', 0)
-            total_return = getattr(backtest_report, 'total_return', 0)
+            max_drawdown = _normalize_threshold_metric(getattr(backtest_report, 'max_drawdown', 0), 'max_drawdown')
+            win_rate = _normalize_threshold_metric(getattr(backtest_report, 'win_rate', 0), 'win_rate')
+            total_return = _normalize_threshold_metric(getattr(backtest_report, 'total_return', 0), 'total_return')
             profit_factor = getattr(backtest_report, 'profit_factor', 0)
         metrics = self.metrics
         if target_metrics:

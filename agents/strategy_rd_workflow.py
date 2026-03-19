@@ -220,6 +220,7 @@ class StrategyRDWorkflow:
         self.current_code: str = ""
         self.current_code_path: str = ""
         self.current_validated_code_path: str = ""
+        self.current_active_strategy_path: str = ""
         self.current_strategy_id: str = ""
         self.current_parent_strategy_id: str = ""
         self.route_decision: Optional[RouteDecision] = None
@@ -259,6 +260,33 @@ class StrategyRDWorkflow:
         if not overrides:
             return "none"
         return ", ".join(f"{key}={value}" for key, value in sorted(overrides.items()))
+
+    def _safe_strategy_filename(self, strategy_name: str) -> str:
+        """將策略名稱轉成檔名安全格式，優先把空白收斂為底線。"""
+        safe_name = re.sub(r"\s+", "_", str(strategy_name).strip())
+        safe_name = re.sub(r"[^a-zA-Z0-9_\u4e00-\u9fff-]", "_", safe_name)
+        safe_name = re.sub(r"_+", "_", safe_name).strip("_")
+        return safe_name or "generated_strategy"
+
+    def _generated_strategy_symlink_path(self, strategy_name: str) -> Path:
+        """取得 strategies/generated 下的活躍策略路徑。"""
+        return Path(__file__).parent.parent / "strategies" / "generated" / f"{self._safe_strategy_filename(strategy_name)}.py"
+
+    def _promote_validated_strategy(self, strategy_name: str, validated_filepath: str) -> Path:
+        """
+        將驗證通過的 iteration artifact 提升為 strategies/generated 下的活躍入口。
+
+        使用 symlink，保持 reports artifact 為單一真實來源。
+        """
+        target = Path(validated_filepath).resolve()
+        link_path = self._generated_strategy_symlink_path(strategy_name)
+        link_path.parent.mkdir(parents=True, exist_ok=True)
+
+        if link_path.exists() or link_path.is_symlink():
+            link_path.unlink()
+
+        link_path.symlink_to(target)
+        return link_path
 
     def _ensure_strategy_identity(self) -> None:
         if not self.current_strategy_id:
@@ -512,9 +540,10 @@ class StrategyRDWorkflow:
                 )
                 code_result = session_result.code_result
 
-                code_path = artifact_dir / f"iteration_{iteration:02d}_attempt_{engineer_attempt_number:02d}_{strategy.name}.py"
+                safe_strategy_name = self._safe_strategy_filename(strategy.name)
+                code_path = artifact_dir / f"iteration_{iteration:02d}_attempt_{engineer_attempt_number:02d}_{safe_strategy_name}.py"
                 code_path = self._persist_code_artifact(code_path, code_result.code)
-                raw_path = artifact_dir / f"iteration_{iteration:02d}_attempt_{engineer_attempt_number:02d}_{strategy.name}.raw.txt"
+                raw_path = artifact_dir / f"iteration_{iteration:02d}_attempt_{engineer_attempt_number:02d}_{safe_strategy_name}.raw.txt"
                 self._persist_raw_response_artifact(raw_path, code_result.raw_response)
                 validation = self._validate_generated_code(
                     filepath=str(code_path),
@@ -604,6 +633,9 @@ class StrategyRDWorkflow:
                 continue
 
             self.current_validated_code_path = validation.filepath
+            self.current_active_strategy_path = str(
+                self._promote_validated_strategy(strategy.name, validation.filepath)
+            )
 
             # 3. 回測
             logger.info("\n[3/5] 執行回測...")

@@ -491,6 +491,10 @@ class ConversationalStrategyDeveloper:
         
         return str(filename)
 
+    def _display_code_path(self, filepath: str) -> str:
+        """將生成代碼路徑標準化為絕對路徑，方便使用者定位。"""
+        return str(Path(filepath).resolve())
+
     def _should_use_local_template(self, spec: "StrategySpec") -> bool:
         """判斷是否應優先使用本地模板生成策略。"""
         indicators = self._normalized_indicator_set(spec)
@@ -1101,7 +1105,8 @@ class {class_name}(BaseStrategy):
 
     def _generated_strategy_path(self, strategy_name: str) -> Path:
         """取得生成策略檔案路徑。"""
-        safe_name = re.sub(r'[^a-zA-Z0-9_]', '_', strategy_name)
+        safe_name = re.sub(r'\s+', '_', strategy_name.strip())
+        safe_name = re.sub(r'[^a-zA-Z0-9_]', '_', safe_name)
         safe_name = re.sub(r'_+', '_', safe_name).strip('_')
         return Path(__file__).parent.parent / "strategies" / "generated" / f"{safe_name}.py"
     
@@ -1907,10 +1912,18 @@ class {class_name}(BaseStrategy):
                     print(workflow.reporter.format_report_compact(report))
 
                     if workflow.current_validated_code_path:
-                        print(f"   🧾 最後一輪代碼: {workflow.current_validated_code_path}")
+                        print(
+                            "   🧾 最後一輪代碼: "
+                            f"{self._display_code_path(workflow.current_validated_code_path)}"
+                        )
+                    if workflow.current_active_strategy_path:
+                        print(
+                            "   🔗 目前啟用策略: "
+                            f"{self._display_code_path(workflow.current_active_strategy_path)}"
+                        )
                         self._update_strategy_md(
                             spec=self.current_strategy,
-                            generated_file=workflow.current_validated_code_path,
+                            generated_file=self._display_code_path(workflow.current_active_strategy_path),
                         )
                 else:
                     print("   ⚠️ Agentic loop 未產出報告")
@@ -1921,7 +1934,10 @@ class {class_name}(BaseStrategy):
                             for issue in last_validation.issues[:5]:
                                 print(f"      - {issue}")
                     if workflow.current_code_path:
-                        print(f"   🧾 最後一輪代碼: {workflow.current_code_path}")
+                        print(
+                            "   🧾 最後一輪代碼: "
+                            f"{self._display_code_path(workflow.current_code_path)}"
+                        )
 
                     if self._should_use_local_template(spec):
                         print("   🛠️ 改用本地模板生成同規格策略，避免再退回不相干的既有策略")
@@ -1930,12 +1946,12 @@ class {class_name}(BaseStrategy):
                             self._generate_local_template_strategy(spec),
                         )
                         if saved_path:
-                            print(f"   🧾 本地模板代碼: {saved_path}")
+                            print(f"   🧾 本地模板代碼: {self._display_code_path(saved_path)}")
                             strategy_class = self._load_generated_strategy(spec.name, saved_path)
                             self._last_strategy_class = strategy_class
                             self._update_strategy_md(
                                 spec=spec,
-                                generated_file=saved_path,
+                                generated_file=self._display_code_path(saved_path),
                             )
                     elif generate_code == "y":
                         print("   ❌ 本次停止執行：未取得可驗證的策略代碼。")
